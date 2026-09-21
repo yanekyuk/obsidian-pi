@@ -70,6 +70,7 @@ export default class PiAgentPlugin extends Plugin {
 			callback: async () => (await this.activateView())?.configureAdvisor(),
 		});
 		this.addCommand({ id: "open", name: "Open chat", callback: () => void this.activateView() });
+		this.addCommand({ id: "settings", name: "Open settings", callback: () => this.openSettings() });
 		this.addCommand({
 			id: "new-session",
 			name: "New session",
@@ -133,6 +134,20 @@ export default class PiAgentPlugin extends Plugin {
 		await this.saveSettings();
 	}
 
+	// Enabled is not the same as running: Obsidian keeps an id in its enabled list after the
+	// plugin's folder is gone, which is exactly what a rename leaves behind.
+	isPluginRunning(id: string): boolean {
+		const plugins = (this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } }).plugins;
+		return Boolean(plugins?.plugins?.[id]);
+	}
+
+	// Opens Obsidian's settings on this plugin's tab. Not in the public API, hence the guards.
+	openSettings(): void {
+		const setting = (this.app as unknown as { setting?: { open?(): void; openTabById?(id: string): void } }).setting;
+		setting?.open?.();
+		setting?.openTabById?.(this.manifest.id);
+	}
+
 	isPluginEnabled(id: string): boolean {
 		// Not in the public API, hence the guard: a wrong "no" only costs a hint in a warning.
 		const plugins = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins;
@@ -150,7 +165,7 @@ export default class PiAgentPlugin extends Plugin {
 	// a pane is only touched when that plugin isn't running and the state in it is plainly ours.
 	private async adoptLegacyPanels(): Promise<void> {
 		const { workspace } = this.app;
-		if (this.isPluginEnabled("pi-agent")) return;
+		if (this.isPluginRunning("pi-agent")) return;
 		const legacy: WorkspaceLeaf[] = [];
 		workspace.iterateAllLeaves((leaf) => {
 			if (leaf.getViewState().type === LEGACY_VIEW_TYPE) legacy.push(leaf);

@@ -143,6 +143,8 @@ export class ChatView extends ItemView {
 		const advisor = readAdvisorConfig().modelKey;
 		menu.addItem((i) => i.setTitle(advisor ? `Advisor: ${advisor}…` : "Set advisor model…").setIcon("graduation-cap").onClick(() => void tab.configureAdvisor()));
 		menu.addItem((i) => i.setTitle("Compact context").setIcon("fold-vertical").onClick(() => void tab.compact()));
+		menu.addSeparator();
+		menu.addItem((i) => i.setTitle("Settings…").setIcon("settings").onClick(() => this.plugin.openSettings()));
 	}
 
 	// ---------------------------------------------------------------- DOM

@@ -157,6 +157,8 @@ npm run build
 npm run install:vault            # the vault Obsidian has open, or: -- /path/to/vault
 ```
 
+The plugin's settings are under Obsidian's Settings → Pi Harness, and one click away from the panel's `⋮` menu → Settings.
+
 Then enable **Pi Harness** under Settings → Community plugins, and open it from the π ribbon icon or the command **Pi Harness: Open chat**.
 
 ## Development

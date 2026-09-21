@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-pi",
-	"version": "0.1.6",
+	"version": "0.1.7",
 	"description": "Obsidian harness for the pi coding agent",
 	"main": "main.js",
 	"type": "module",
