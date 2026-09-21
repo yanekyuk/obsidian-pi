@@ -1,0 +1,1264 @@
+/* Pi Harness. Every color, font and radius comes from Obsidian's theme variables,
+   so the panel follows the active theme, accent color and light/dark mode. */
+
+.pi-view {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	padding: 0 !important;
+	overflow: hidden;
+}
+
+/* Each tab is a whole conversation: transcript above, dock below. One is shown at a time. */
+.pi-tabs,
+.pi-tab {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.pi-icon {
+	display: inline-flex;
+	flex: none;
+	color: var(--text-faint);
+}
+.pi-icon .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+
+/* ---- banner (startup failures, crashes) ---- */
+
+.pi-banner {
+	margin: var(--size-4-3);
+	padding: var(--size-4-3);
+	border: 1px solid var(--background-modifier-error);
+	border-radius: var(--radius-m);
+	background: var(--background-secondary);
+	font-size: var(--font-ui-small);
+}
+.pi-banner-title {
+	font-weight: var(--font-semibold);
+	color: var(--text-error);
+}
+.pi-banner-detail {
+	margin: var(--size-4-2) 0;
+	max-height: 12em;
+	overflow: auto;
+	white-space: pre-wrap;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+/* ---- transcript ---- */
+
+.pi-messages {
+	flex: 1;
+	overflow-y: auto;
+	padding: var(--size-4-4) var(--size-4-4) var(--size-4-2);
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-4);
+	user-select: text;
+}
+
+.pi-msg {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	min-width: 0;
+	font-size: var(--font-ui-medium);
+	line-height: var(--line-height-normal);
+}
+
+.pi-msg-user {
+	align-self: flex-end;
+	max-width: 88%;
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: var(--radius-l);
+	background: var(--background-modifier-hover);
+	border: 1px solid var(--background-modifier-border);
+}
+
+.pi-msg-context {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+.pi-msg-notice {
+	align-self: center;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.pi-msg-notice.is-error {
+	align-self: stretch;
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: var(--radius-m);
+	border: 1px solid var(--background-modifier-error);
+	color: var(--text-error);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+/* Rendered markdown: trim the outer margins the note renderer adds. */
+.pi-text > :first-child {
+	margin-top: 0;
+}
+.pi-text > :last-child {
+	margin-bottom: 0;
+}
+.pi-text {
+	overflow-wrap: anywhere;
+}
+.pi-text pre {
+	overflow-x: auto;
+}
+.pi-text table {
+	display: block;
+	overflow-x: auto;
+}
+
+/* ---- thinking ---- */
+
+.pi-thinking,
+.pi-tool {
+	border-radius: var(--radius-m);
+	font-size: var(--font-ui-small);
+}
+.pi-thinking > summary,
+.pi-tool > summary {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	cursor: pointer;
+	list-style: none;
+	color: var(--text-muted);
+}
+.pi-thinking > summary::-webkit-details-marker,
+.pi-tool > summary::-webkit-details-marker {
+	display: none;
+}
+.pi-thinking > summary:hover,
+.pi-tool > summary:hover {
+	color: var(--text-normal);
+}
+.pi-thinking-body {
+	margin-top: var(--size-4-2);
+	padding-left: var(--size-4-3);
+	border-left: 2px solid var(--background-modifier-border);
+	color: var(--text-muted);
+}
+
+/* ---- tool calls ---- */
+
+.pi-tool {
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+.pi-tool > summary {
+	padding: var(--size-2-3) var(--size-4-2);
+}
+.pi-tool-name {
+	flex: none;
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+}
+.pi-tool-summary {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+/* With a path, the link gives way to the buttons after it: they must never be the part that is cut off. */
+.pi-tool-summary.has-path {
+	display: flex;
+	align-items: center;
+}
+.pi-tool-path {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--link-color);
+	text-decoration: none;
+}
+.pi-tool-path:hover {
+	text-decoration: underline;
+}
+.pi-tool-action {
+	display: inline-flex;
+	vertical-align: middle;
+	margin-left: var(--size-2-2);
+	padding: var(--size-2-1);
+	color: var(--text-faint);
+}
+.pi-tool-path + .pi-tool-action {
+	margin-left: var(--size-2-3);
+}
+.pi-tool-action .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+.pi-tool-images {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-2-3);
+	padding: var(--size-4-2) var(--size-4-3) var(--size-4-3);
+}
+.pi-tool-images img {
+	max-width: 100%;
+	max-height: 320px;
+	object-fit: contain;
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+	cursor: zoom-in;
+}
+.pi-tool-images img.is-expanded {
+	max-height: none;
+	cursor: zoom-out;
+}
+.pi-tool-status {
+	display: inline-flex;
+	flex: none;
+	color: var(--text-faint);
+}
+.pi-tool-status .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+.pi-tool[data-status="running"] .pi-tool-status {
+	color: var(--interactive-accent);
+	animation: pi-spin 1.2s linear infinite;
+}
+.pi-tool[data-status="done"] .pi-tool-status {
+	color: var(--text-success);
+}
+.pi-tool[data-status="error"] .pi-tool-status {
+	color: var(--text-error);
+}
+.pi-tool[data-status="error"] {
+	border-color: var(--background-modifier-error);
+}
+
+.pi-tool-output {
+	margin: 0;
+	padding: var(--size-4-2);
+	max-height: 22em;
+	overflow: auto;
+	border-top: 1px solid var(--background-modifier-border);
+	border-radius: 0 0 var(--radius-m) var(--radius-m);
+	background: var(--code-background);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	color: var(--text-muted);
+}
+.pi-tool-output-empty::before {
+	content: "No output";
+	color: var(--text-faint);
+	font-family: var(--font-interface);
+}
+.pi-diff-add {
+	background: rgba(var(--color-green-rgb), 0.15);
+	color: var(--text-normal);
+}
+.pi-diff-del {
+	background: rgba(var(--color-red-rgb), 0.15);
+	color: var(--text-normal);
+}
+
+@keyframes pi-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* ---- empty state ---- */
+
+.pi-empty {
+	margin: auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--size-4-3);
+	text-align: center;
+	color: var(--text-muted);
+}
+.pi-empty-icon .svg-icon {
+	width: var(--icon-xl);
+	height: var(--icon-xl);
+	color: var(--text-faint);
+}
+.pi-empty-skills {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: var(--size-2-3);
+}
+
+/* ---- dock: activity, queue, composer ---- */
+
+/* Obsidian's status bar floats over the bottom corner of the right sidebar. The view measures
+   how far it reaches into the panel (--pi-status-bar-clearance) and the bottom edge keeps clear of it. */
+.pi-dock {
+	flex: none;
+	padding: 0 var(--size-4-3) max(var(--size-4-3), calc(var(--pi-status-bar-clearance, 0px) + var(--size-2-3)));
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-3);
+}
+
+/* The status lines between transcript and composer share the transcript's left edge and
+   the look of its "Thinking…" lines: same size, icon column and gap. */
+.pi-activity,
+.pi-queue-item {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: 0 var(--size-2-2);
+	font-size: var(--font-ui-small);
+	line-height: var(--line-height-tight);
+	color: var(--text-muted);
+}
+.pi-activity {
+	min-height: 1.5em;
+	color: var(--text-accent);
+}
+.pi-activity:not(.is-active) .pi-icon {
+	display: none;
+}
+.pi-activity .pi-icon {
+	color: var(--text-accent);
+}
+.pi-activity .pi-icon .svg-icon {
+	animation: pi-spin 1.2s linear infinite;
+}
+.pi-activity-text,
+.pi-queue-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.pi-queue:empty,
+.pi-widgets:empty {
+	display: none;
+}
+.pi-queue {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-2);
+}
+.pi-queue-label {
+	flex: none;
+	padding: 0 var(--size-2-3);
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.pi-widget {
+	margin: 0;
+	padding: var(--size-2-3) var(--size-4-2);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	white-space: pre-wrap;
+}
+
+.pi-composer {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-3);
+	padding: var(--size-4-2);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-l);
+	background: var(--background-primary);
+}
+.pi-composer:focus-within {
+	border-color: var(--background-modifier-border-focus);
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.pi-note-chip {
+	align-self: flex-start;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	max-width: 100%;
+	padding: var(--size-2-1) var(--size-4-2);
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	cursor: pointer;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.pi-note-chip.is-off {
+	background: none;
+	color: var(--text-faint);
+	text-decoration: line-through;
+}
+
+textarea.pi-input {
+	width: 100%;
+	max-height: 40vh;
+	min-height: 0;
+	padding: var(--size-2-2);
+	border: none;
+	background: transparent;
+	box-shadow: none;
+	resize: none;
+	font-family: var(--font-interface);
+	font-size: var(--font-ui-medium);
+	line-height: var(--line-height-tight);
+	color: var(--text-normal);
+}
+textarea.pi-input:hover,
+textarea.pi-input:focus,
+textarea.pi-input:active {
+	border: none;
+	background: transparent;
+	box-shadow: none;
+}
+
+.pi-composer-bar {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	min-width: 0;
+}
+.pi-pill {
+	flex: 0 1 auto;
+	min-width: 0;
+	height: auto;
+	padding: var(--size-2-1) var(--size-4-2);
+	border-radius: var(--radius-s);
+	box-shadow: none;
+	background: none;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.pi-empty .pi-pill {
+	background: var(--background-modifier-hover);
+	cursor: pointer;
+}
+.pi-stats {
+	flex: 1;
+	min-width: 0;
+	text-align: right;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+/* The round buttons at the end of the bar: Send, and Stop while pi works. Same size and shape;
+   only Send carries the accent. Queue is a quiet icon the same height beside them. */
+.pi-send,
+.pi-stop,
+.pi-queue-btn {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border-radius: 50%;
+}
+.pi-send .svg-icon {
+	width: var(--icon-s);
+	height: var(--icon-s);
+}
+.pi-stop {
+	background: var(--interactive-normal);
+	box-shadow: none;
+	color: var(--text-muted);
+}
+.pi-stop:hover {
+	background: var(--interactive-hover);
+	color: var(--text-error);
+}
+.pi-stop .svg-icon {
+	width: 10px;
+	height: 10px;
+	fill: currentColor;
+}
+.pi-queue-btn {
+	color: var(--text-muted);
+}
+.pi-queue-btn .svg-icon {
+	width: var(--icon-s);
+	height: var(--icon-s);
+}
+.pi-queue-clear .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+.pi-queue-clear {
+	flex: none;
+	margin-left: auto;
+	padding: var(--size-2-1);
+	color: var(--text-faint);
+}
+
+/* Suggestions open upward from the composer, reusing Obsidian's own suggestion styles. */
+.pi-suggest {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: calc(100% + var(--size-2-3));
+	max-height: 50vh;
+	overflow-y: auto;
+	z-index: var(--layer-popover);
+}
+
+/* ---- cards docked above the composer: questions from extensions, side questions ---- */
+
+.pi-dialogs:empty,
+.pi-side:empty {
+	display: none;
+}
+.pi-dialog,
+.pi-side-card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	max-height: 50vh;
+	overflow-y: auto;
+	padding: var(--size-4-3);
+	border: 1px solid var(--interactive-accent);
+	border-radius: var(--radius-l);
+	background: var(--background-secondary);
+	font-size: var(--font-ui-small);
+	outline: none;
+}
+.pi-side-card {
+	border-color: var(--background-modifier-border);
+}
+.pi-dialog-head {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-3);
+}
+.pi-dialog-head .pi-icon {
+	color: var(--text-accent);
+}
+.pi-dialog-header {
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-semibold);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-accent);
+}
+.pi-dialog-count,
+.pi-side-note {
+	flex: 1;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.pi-dialog-question {
+	font-size: var(--font-ui-medium);
+	color: var(--text-normal);
+	overflow-wrap: anywhere;
+}
+.pi-dialog-question > :first-child {
+	margin-top: 0;
+}
+.pi-dialog-question > :last-child {
+	margin-bottom: 0;
+}
+
+.pi-dialog-options {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-3);
+}
+.pi-dialog-options.is-overridden {
+	opacity: 0.45;
+}
+.pi-dialog-option {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--size-4-2);
+	width: 100%;
+	height: auto;
+	padding: var(--size-4-2) var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	background: var(--background-primary);
+	box-shadow: none;
+	text-align: left;
+	white-space: normal;
+	cursor: pointer;
+}
+.pi-dialog-option:hover,
+.pi-dialog-option:focus-visible {
+	border-color: var(--interactive-accent);
+	background: var(--background-modifier-hover);
+}
+.pi-dialog-option input[type="checkbox"] {
+	flex: none;
+	margin: 2px 0 0;
+}
+.pi-dialog-key {
+	flex: none;
+	min-width: 1.5em;
+	padding: 0 var(--size-2-2);
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-border);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	text-align: center;
+	color: var(--text-muted);
+}
+.pi-dialog-option-main {
+	flex: 1;
+	min-width: 0;
+}
+.pi-dialog-option-label {
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+}
+.pi-dialog-option-desc {
+	margin-top: var(--size-2-1);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.pi-dialog-option-preview {
+	margin: var(--size-2-3) 0 0;
+	padding: var(--size-2-3);
+	max-height: 10em;
+	overflow: auto;
+	border-radius: var(--radius-s);
+	background: var(--code-background);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	white-space: pre-wrap;
+	color: var(--text-muted);
+}
+.pi-dialog-input,
+.pi-dialog-editor {
+	width: 100%;
+}
+.pi-dialog-editor {
+	min-height: 8em;
+	font-family: var(--font-monospace);
+}
+.pi-dialog-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--size-2-3);
+}
+
+.pi-side-question {
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+	overflow-wrap: anywhere;
+}
+.pi-side-answer {
+	overflow-wrap: anywhere;
+}
+.pi-side-answer > :first-child {
+	margin-top: 0;
+}
+.pi-side-answer > :last-child {
+	margin-bottom: 0;
+}
+.pi-side-status {
+	color: var(--text-faint);
+}
+
+/* ---- task list ---- */
+
+.pi-todos {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	background: var(--background-secondary);
+	font-size: var(--font-ui-small);
+}
+.pi-todos > summary {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-3);
+	padding: var(--size-2-3) var(--size-4-2);
+	cursor: pointer;
+	list-style: none;
+	overflow: hidden;
+	border-radius: var(--radius-m);
+}
+.pi-todos > summary::-webkit-details-marker {
+	display: none;
+}
+.pi-todos-title {
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+}
+.pi-todos-count {
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.pi-todos-active {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-accent);
+}
+.pi-todos[open] .pi-todos-active {
+	visibility: hidden;
+}
+.pi-todos-bar {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 2px;
+	background: var(--background-modifier-border);
+}
+.pi-todos-bar-fill {
+	height: 100%;
+	background: var(--interactive-accent);
+	transition: width 0.3s ease;
+}
+.pi-todos-list {
+	max-height: 30vh;
+	overflow-y: auto;
+	padding: var(--size-2-3) var(--size-4-2) var(--size-4-2);
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-2);
+}
+.pi-todo {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--size-2-3);
+	color: var(--text-muted);
+}
+.pi-todo-icon {
+	display: inline-flex;
+	flex: none;
+	margin-top: 2px;
+	color: var(--text-faint);
+}
+.pi-todo-icon .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+.pi-todo-text {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.pi-todo[data-status="in_progress"] {
+	color: var(--text-normal);
+}
+.pi-todo[data-status="in_progress"] .pi-todo-icon {
+	color: var(--interactive-accent);
+	animation: pi-spin 1.2s linear infinite;
+}
+.pi-todo[data-status="completed"] .pi-todo-text {
+	text-decoration: line-through;
+	color: var(--text-faint);
+}
+.pi-todo[data-status="completed"] .pi-todo-icon {
+	color: var(--text-success);
+}
+.pi-todo-blocked {
+	flex: none;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+/* ---- structured tool results ---- */
+
+.pi-tool-rich {
+	padding: var(--size-4-2) var(--size-4-3);
+	max-height: 26em;
+	overflow: auto;
+	border-top: 1px solid var(--background-modifier-border);
+	overflow-wrap: anywhere;
+}
+.pi-tool-rich > :first-child {
+	margin-top: 0;
+}
+.pi-tool-rich > :last-child {
+	margin-bottom: 0;
+}
+.pi-qa,
+.pi-results {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+}
+.pi-qa-question,
+.pi-result-url {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.pi-qa-answer {
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+}
+.pi-qa-notes {
+	font-size: var(--font-ui-smaller);
+	font-style: italic;
+	color: var(--text-faint);
+}
+.pi-result-title {
+	font-weight: var(--font-medium);
+}
+.pi-result-snippet {
+	margin-top: var(--size-2-1);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+/* ---- sessions drawer: takes the transcript's place while open ---- */
+
+.pi-sessions {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.pi-view.is-showing-sessions .pi-tabs {
+	display: none;
+}
+.pi-sessions-top {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-3);
+	padding: var(--size-4-3) var(--size-4-3) var(--size-4-2);
+}
+.pi-sessions-search {
+	flex: 1;
+	min-width: 0;
+}
+.pi-sessions-list {
+	flex: 1;
+	overflow-y: auto;
+	padding: 0 var(--size-4-2) max(var(--size-4-2), var(--pi-status-bar-clearance, 0px));
+}
+.pi-sessions-group {
+	padding: var(--size-4-3) var(--size-4-2) var(--size-2-2);
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-medium);
+	color: var(--text-faint);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.pi-sessions-empty {
+	padding: var(--size-4-6) var(--size-4-3);
+	text-align: center;
+	font-size: var(--font-ui-small);
+	color: var(--text-faint);
+}
+
+.pi-session {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-3);
+	padding: var(--size-2-3) var(--size-4-2);
+	border-radius: var(--radius-s);
+	cursor: pointer;
+}
+.pi-session:hover,
+.pi-session.is-selected {
+	background: var(--nav-item-background-hover);
+}
+.pi-session.is-current {
+	background: var(--nav-item-background-active);
+}
+.pi-session-main {
+	flex: 1;
+	min-width: 0;
+}
+.pi-session-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: var(--font-ui-small);
+	color: var(--nav-item-color);
+}
+.pi-session.is-current .pi-session-title {
+	color: var(--nav-item-color-active);
+	font-weight: var(--font-medium);
+}
+.pi-session-meta {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.pi-session-more {
+	flex: none;
+	opacity: 0;
+}
+.pi-session:hover .pi-session-more,
+.pi-session-more:focus-visible {
+	opacity: 1;
+}
+
+/* ---- image attachments ---- */
+
+.pi-attachments:empty {
+	display: none;
+}
+.pi-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-2-3);
+}
+.pi-attachment {
+	position: relative;
+	width: 56px;
+	height: 56px;
+}
+.pi-attachment img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+}
+.pi-attachment-remove {
+	position: absolute;
+	top: -6px;
+	right: -6px;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border-radius: 50%;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+.pi-attachment-remove .svg-icon {
+	width: 12px;
+	height: 12px;
+}
+.pi-composer.is-drop-target {
+	border-color: var(--interactive-accent);
+	border-style: dashed;
+}
+
+.pi-msg-images {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-2-3);
+}
+.pi-msg-images img {
+	max-width: 140px;
+	max-height: 140px;
+	object-fit: cover;
+	border-radius: var(--radius-s);
+	cursor: zoom-in;
+}
+.pi-msg-images img.is-expanded {
+	max-width: 100%;
+	max-height: none;
+	cursor: zoom-out;
+}
+
+/* ---- toolbar: in the panel, because sidebars hide the view header ---- */
+
+.pi-toolbar {
+	position: relative;
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-3);
+	padding: var(--size-4-2) var(--size-4-2) var(--size-4-2) var(--size-4-4);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.pi-toolbar-title {
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	margin-right: auto;
+	padding: var(--size-2-1) var(--size-2-3);
+	margin-left: calc(-1 * var(--size-2-3));
+	border-radius: var(--radius-s);
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+.pi-toolbar-title:hover,
+.pi-toolbar-title.is-active,
+.pi-toolbar-title:focus-visible {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+.pi-toolbar-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.pi-toolbar-others {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-1);
+	margin-left: var(--size-2-2);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+/* ---- tab status: the same marks in the title and in the tab list ---- */
+
+.pi-tab-status {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--icon-s);
+	height: var(--icon-s);
+	color: var(--text-faint);
+}
+.pi-tab-status .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+.pi-tab-status[data-status="working"] {
+	color: var(--text-accent);
+}
+.pi-tab-status[data-status="working"] .svg-icon {
+	animation: pi-spin 1.2s linear infinite;
+}
+.pi-tab-status[data-status="asking"] {
+	color: var(--text-warning);
+}
+.pi-tab-status[data-status="error"] {
+	color: var(--text-error);
+}
+.pi-tab-status[data-status="unread"]::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--interactive-accent);
+}
+
+/* ---- tab list: drops down from the title, in Obsidian's own suggestion styles ---- */
+
+.pi-switcher {
+	position: absolute;
+	top: calc(100% + var(--size-2-1));
+	left: var(--size-4-2);
+	right: var(--size-4-2);
+	max-width: 360px;
+	max-height: 60vh;
+	overflow-y: auto;
+	z-index: var(--layer-popover);
+	outline: none;
+}
+.pi-switcher .suggestion {
+	padding: var(--size-2-3);
+}
+.pi-switcher-row {
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-2) var(--size-4-2) var(--size-4-3);
+}
+.pi-switcher-row .suggestion-icon {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--icon-s);
+	height: var(--icon-s);
+	margin: 0;
+}
+.pi-switcher-row .suggestion-icon .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+.pi-switcher-row .suggestion-title {
+	font-size: var(--font-ui-small);
+}
+.pi-switcher-row .suggestion-note {
+	margin-top: var(--size-2-1);
+	font-size: var(--font-ui-smaller);
+}
+.pi-switcher-row.is-current .suggestion-title {
+	font-weight: var(--font-semibold);
+}
+.pi-switcher-row .suggestion-title,
+.pi-switcher-row .suggestion-note {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.pi-switcher-row .suggestion-content {
+	min-width: 0;
+}
+.pi-switcher-action {
+	flex: none;
+	padding: var(--size-2-1);
+	opacity: 0;
+}
+.pi-switcher-action + .pi-switcher-action {
+	margin-left: calc(-1 * var(--size-2-3));
+}
+.pi-switcher-row:hover .pi-switcher-action,
+.pi-switcher-row.is-selected .pi-switcher-action {
+	opacity: 1;
+}
+/* "New tab" is set apart by a rule that floats between the rows, so its hover shape stays whole. */
+.pi-switcher-new {
+	position: relative;
+	margin-top: calc(var(--size-2-3) * 2 + 1px);
+	color: var(--text-muted);
+}
+.pi-switcher-new::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: calc(-1 * var(--size-2-3) - 1px);
+	border-top: 1px solid var(--background-modifier-border);
+}
+.pi-toolbar .is-reloading {
+	pointer-events: none;
+	color: var(--text-accent);
+}
+.pi-toolbar .is-reloading .svg-icon {
+	animation: pi-spin 1.2s linear infinite;
+}
+.pi-toolbar .nav-buttons-container {
+	flex: none;
+	padding: 0;
+	justify-content: flex-end;
+}
+
+/* ---- warnings in the dock ---- */
+
+.pi-warning {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--size-2-3);
+	padding: var(--size-2-3) var(--size-4-2);
+	border: 1px solid var(--background-modifier-error);
+	border-radius: var(--radius-m);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-warning);
+	cursor: pointer;
+}
+.pi-warning .pi-icon {
+	margin-top: 1px;
+	color: var(--text-warning);
+}
+
+.pi-todos-clear {
+	flex: none;
+	padding: var(--size-2-1);
+}
+.pi-todos-clear .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+
+/* ---- compact button, beside the context reading ---- */
+
+.pi-compact {
+	flex: none;
+	padding: var(--size-2-1);
+	color: var(--text-faint);
+}
+.pi-compact .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+.pi-tab.is-compacting .pi-compact {
+	pointer-events: none;
+	color: var(--interactive-accent);
+	animation: pi-pulse 1s ease-in-out infinite;
+}
+@keyframes pi-pulse {
+	50% {
+		opacity: 0.35;
+	}
+}
+
+/* ---- slash commands and their output, in the transcript ---- */
+
+.pi-msg-command {
+	align-self: flex-end;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.pi-msg-output {
+	padding: var(--size-4-2) var(--size-4-3);
+	border-left: 2px solid var(--background-modifier-border);
+	font-size: var(--font-ui-small);
+	line-height: var(--line-height-tight);
+	color: var(--text-muted);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.pi-msg-output[data-type="warning"] {
+	border-left-color: var(--text-warning);
+}
+.pi-msg-output[data-type="error"] {
+	border-left-color: var(--text-error);
+	color: var(--text-error);
+}
+
+/* ---- markdown in small places: labels, options, tasks ---- */
+
+.pi-md-inline > p:only-child {
+	display: inline;
+	margin: 0;
+}
+.pi-md-inline > :first-child {
+	margin-top: 0;
+}
+.pi-md-inline > :last-child {
+	margin-bottom: 0;
+}
+.pi-md-inline code {
+	font-size: 0.9em;
+}
+.pi-dialog-option-preview-md {
+	margin-top: var(--size-2-3);
+	max-height: 14em;
+	overflow: auto;
+	font-size: var(--font-ui-smaller);
+}
+
+/* ---- the one-time offer to install pi extensions ---- */
+
+.pi-offer:empty {
+	display: none;
+}
+.pi-offer-check {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	color: var(--text-muted);
+}

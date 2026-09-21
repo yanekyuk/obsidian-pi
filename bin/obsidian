@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Launcher for the official Obsidian CLI, bundled with the Pi Harness plugin.
+# Obsidian 1.12.7+ installs the real binary inside the app bundle on macOS.
+APP_CLI="/Applications/Obsidian.app/Contents/MacOS/obsidian-cli"
+GLOBAL_CLI="/usr/local/bin/obsidian"
+BREW_CLI="/opt/homebrew/bin/obsidian"
+
+if [[ -x "$APP_CLI" ]]; then
+  exec "$APP_CLI" "$@"
+elif [[ -x "$GLOBAL_CLI" && "$GLOBAL_CLI" != "$0" ]]; then
+  exec "$GLOBAL_CLI" "$@"
+elif [[ -x "$BREW_CLI" && "$BREW_CLI" != "$0" ]]; then
+  exec "$BREW_CLI" "$@"
+else
+  cat >&2 <<'MSG'
+Obsidian CLI is not installed/registered.
+
+Required setup:
+  1. Update Obsidian to installer/app version 1.12.7 or newer.
+  2. Open Obsidian → Settings → General.
+  3. Enable "Command line interface" and follow the prompt.
+MSG
+  exit 127
+fi

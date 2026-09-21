@@ -1,0 +1,26 @@
+{
+	"name": "obsidian-pi",
+	"version": "0.1.1",
+	"description": "Obsidian harness for the pi coding agent",
+	"main": "main.js",
+	"type": "module",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+		"install:vault": "node scripts/install.mjs",
+		"test:rpc": "node scripts/rpc-smoke.mjs"
+	},
+	"keywords": [
+		"obsidian",
+		"pi",
+		"agent"
+	],
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"builtin-modules": "^4.0.0",
+		"esbuild": "^0.25.0",
+		"obsidian": "latest",
+		"typescript": "^5.6.0"
+	}
+}
