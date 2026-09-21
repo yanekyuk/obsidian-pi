@@ -31,6 +31,7 @@ export { tasksFrom } from ${JSON.stringify(join(root, "src/view/TodoPanel.ts"))}
 export { TOOL_RENDERERS } from ${JSON.stringify(join(root, "src/view/toolRenderers.ts"))};
 export { summarize } from ${JSON.stringify(join(root, "src/view/TabSwitcher.ts"))};
 export { extractBundledFiles } from ${JSON.stringify(join(root, "src/bundled.ts"))};
+export { prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/agentDir.ts"))};
 export { savedTabsFrom } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};`,
 );
 // sessions.ts reaches prompt.ts, which imports the Obsidian API; outside the app a stub will do.
@@ -45,7 +46,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, savedTabsFrom, extractBundledFiles } =
+const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, savedTabsFrom, extractBundledFiles, prepareAgentDir, sessionDirFor } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -121,6 +122,44 @@ const check = (ok, label, detail = "") => {
 	git("pack-refs", "--all");
 	check(versionAt(gitPkg) === git("rev-parse", "--short=7", "HEAD") && versionAt(gitPkg) !== first, "a pulled update shows as a new commit, packed refs included");
 	check(versionAt(join(work, "nowhere")) === null, "a folder that is neither has no version");
+}
+
+// ---- the panel's own pi config folder: what crosses over from the user's, and what doesn't
+{
+	const { lstatSync, readFileSync, readlinkSync, symlinkSync } = await import("fs");
+	const user = join(work, "user-agent");
+	const harness = join(work, "harness-agent");
+	const vault = join(work, "home", "vaults", "notes");
+	mkdirSync(join(user, "mcp-oauth"), { recursive: true });
+	mkdirSync(join(user, "extensions"));
+	mkdirSync(vault, { recursive: true });
+	writeFileSync(join(user, "auth.json"), '{"anthropic":"secret"}');
+	writeFileSync(join(user, "settings.json"), JSON.stringify({ defaultModel: "m1", theme: "dark", packages: ["npm:something"], compaction: { enabled: true } }));
+	writeFileSync(join(user, "trust.json"), JSON.stringify({ [join(work, "home")]: true, [join(work, "home", "vaults")]: false, "/elsewhere": true }));
+	// pi's own first start leaves an empty auth.json behind; the link has to take its place.
+	mkdirSync(harness);
+	writeFileSync(join(harness, "auth.json"), "{}");
+
+	await prepareAgentDir(vault, user, harness);
+	const json = (p) => JSON.parse(readFileSync(p, "utf8"));
+	check(lstatSync(join(harness, "auth.json")).isSymbolicLink() && readlinkSync(join(harness, "auth.json")) === join(user, "auth.json"), "credentials are linked, so a refreshed token is shared");
+	check(lstatSync(join(harness, "mcp-oauth")).isSymbolicLink() && !existsSync(join(harness, "models.json")), "MCP logins are linked; what the user doesn't have isn't invented");
+	const seeded = json(join(harness, "settings.json"));
+	check(seeded.defaultModel === "m1" && seeded.compaction?.enabled === true && !("packages" in seeded) && !("theme" in seeded), "settings: model defaults cross over, the package list and theme don't");
+	check(!existsSync(join(harness, "extensions")), "extensions, skills and the rest of the user's folder stay behind");
+	check(Object.keys(json(join(harness, "trust.json"))).length === 1 && json(join(harness, "trust.json"))[vault] === false, "trust: the nearest decision above the vault is carried, and only for the vault");
+
+	writeFileSync(join(harness, "settings.json"), JSON.stringify({ ...seeded, defaultModel: "chosen-in-panel", packages: ["npm:@juicesharp/rpiv-todo"] }));
+	await prepareAgentDir(vault, user, harness);
+	const again = json(join(harness, "settings.json"));
+	check(again.defaultModel === "chosen-in-panel" && again.packages.length === 1, "a second start changes nothing the panel's pi has set for itself");
+
+	const own = join(work, "harness-own-login");
+	mkdirSync(own);
+	writeFileSync(join(own, "auth.json"), '{"openai":"logged in here"}');
+	await prepareAgentDir(vault, user, own);
+	check(!lstatSync(join(own, "auth.json")).isSymbolicLink(), "credentials that exist only in the panel's folder are not overwritten");
+	check(sessionDirFor("/Users/me/My Vault", "/u/.pi/agent") === "/u/.pi/agent/sessions/--Users-me-My Vault--", "sessions stay in the folder pi itself would use for the vault");
 }
 
 // ---- tabs: what the title shows for the tabs out of sight, and what the layout brings back
@@ -280,6 +319,22 @@ check(typeof state.thinkingLevel === "string", "get_state", `model=${state.model
 const commands = await client.getCommands();
 const fromPackage = OBSIDIAN_SKILLS.filter((name) => commands.some((c) => c.name === `skill:${name}` && /obsidian-skills/.test(c.sourceInfo?.path ?? "")));
 check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load from ${SKILLS_PACKAGE.source} as a pi package`, `${fromPackage.length}/${OBSIDIAN_SKILLS.length}: ${fromPackage.join(", ")}`);
+
+// A second pi, set up the way the panel sets up its own: a fresh config folder prepared from this
+// machine's real one. It must be able to log in, and must not see what the user has for the terminal.
+{
+	const isolatedDir = join(work, "isolated-agent");
+	await prepareAgentDir(work, undefined, isolatedDir);
+	const isolated = new PiRpcClient();
+	await isolated.start({ binary: "pi", args: ["--no-session", "--no-skills"], cwd: work, env: { ...env, PI_CODING_AGENT_DIR: isolatedDir } });
+	const theirs = await isolated.getCommands();
+	const usable = await isolated.getAvailableModels();
+	await isolated.stop();
+	check(usable.length > 0, "isolated pi: the linked credentials give it models to use", `${usable.length} models`);
+	// pi ships a few extensions of its own inline (llama.cpp); those aren't the user's.
+	const builtIn = (c) => (c.sourceInfo?.path ?? "").startsWith("<inline:");
+	check(theirs.filter((c) => (c.source === "extension" || c.source === "skill") && !builtIn(c)).length === 0, "isolated pi: none of the user's extensions or skills are loaded", `${commands.filter((c) => c.source === "extension").length} extension commands in the user's own pi`);
+}
 
 const levels = await client.getAvailableThinkingLevels();
 check(Array.isArray(levels) && levels.length > 0, "get_available_thinking_levels", levels.join(","));

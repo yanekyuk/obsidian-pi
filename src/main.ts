@@ -1,6 +1,7 @@
 import { FileSystemAdapter, Notice, Plugin, addIcon, type Editor } from "obsidian";
-import { existsSync } from "fs";
-import { delimiter, isAbsolute, join } from "path";
+import { existsSync, promises as fs } from "fs";
+import { delimiter, isAbsolute, join, resolve } from "path";
+import { prepareAgentDir, sessionDirFor } from "./agentDir";
 import { extractBundledFiles } from "./bundled";
 import { resolveEnv } from "./env";
 import { buildSystemPrompt } from "./prompt";
@@ -20,6 +21,7 @@ export default class PiAgentPlugin extends Plugin {
 	requirements = new Requirements({
 		piCommand: () => this.piCommand(),
 		enabled: () => this.settings.manageExtensions,
+		wantsMcp: () => existsSync(join(this.vaultPath, ".mcp.json")),
 		autoUpdate: () => this.settings.autoUpdate,
 		busy: () => this.chatViews().some((view) => view.isBusy),
 		lastUpdate: () => this.settings.lastExtensionUpdate,
@@ -131,7 +133,17 @@ export default class PiAgentPlugin extends Plugin {
 
 	// How to run the pi binary for anything other than the chat process itself.
 	async piCommand(): Promise<{ binary: string; env: NodeJS.ProcessEnv; cwd: string }> {
-		return { binary: this.settings.piPath, env: await resolveEnv(), cwd: this.vaultPath };
+		return { binary: this.settings.piPath, env: await this.piEnv(), cwd: this.vaultPath };
+	}
+
+	// The environment every pi the plugin starts runs in: the chat, side questions, installs and updates.
+	private async piEnv(): Promise<NodeJS.ProcessEnv> {
+		const env = { ...(await resolveEnv()) };
+		// The Obsidian CLI skill calls `obsidian`. The plugin's launcher goes last on the PATH, so
+		// a command of that name the user already has wins.
+		if (this.manifest.dir) env.PATH = [env.PATH, join(this.vaultPath, this.manifest.dir, "bin")].filter(Boolean).join(delimiter);
+		if (this.settings.isolate) env.PI_CODING_AGENT_DIR = await prepareAgentDir(this.vaultPath);
+		return env;
 	}
 
 	async saveSettings(): Promise<void> {
@@ -192,20 +204,35 @@ export default class PiAgentPlugin extends Plugin {
 		if (s.model) args.push("--model", s.model);
 		if (sessionFile) args.push("--session", sessionFile);
 
+		const env = await this.piEnv();
 		const skillDirs = s.extraSkillPaths
 			.split("\n")
 			.map((p) => p.trim())
 			.filter(Boolean)
 			.map((p) => (isAbsolute(p) ? p : join(vault, p)));
-		for (const dir of skillDirs) if (existsSync(dir)) args.push("--skill", dir);
+		if (s.isolate) {
+			// A config folder of its own doesn't stop pi from finding ~/.agents/skills, so skills are
+			// named one by one instead: those of installed packages and the vault's own. The vault's
+			// count only once the user has trusted it, as they would if pi went looking by itself.
+			args.push("--no-skills", "--session-dir", sessionDirFor(vault));
+			const packages = await this.requirements.installed().catch(() => []);
+			skillDirs.unshift(...packages.map((pkg) => join(pkg.path, "skills")));
+			if (await this.vaultIsTrusted(env)) skillDirs.push(join(vault, ".pi", "skills"), join(vault, ".agents", "skills"));
+		}
+		for (const dir of new Set(skillDirs)) if (existsSync(dir)) args.push("--skill", dir);
 
 		// Naive split is enough for flags; quote-aware parsing isn't worth it here.
 		args.push(...s.extraArgs.split(/\s+/).filter(Boolean));
 
-		// The Obsidian CLI skill calls `obsidian`. The plugin's launcher goes last on the PATH, so
-		// a command of that name the user already has wins.
-		const env = { ...(await resolveEnv()) };
-		if (this.manifest.dir) env.PATH = [env.PATH, join(vault, this.manifest.dir, "bin")].filter(Boolean).join(delimiter);
 		return { binary: s.piPath, args, cwd: vault, env };
+	}
+
+	private async vaultIsTrusted(env: NodeJS.ProcessEnv): Promise<boolean> {
+		try {
+			const trust = JSON.parse(await fs.readFile(join(env.PI_CODING_AGENT_DIR ?? "", "trust.json"), "utf8")) as Record<string, unknown>;
+			return trust[resolve(this.vaultPath)] === true;
+		} catch {
+			return false;
+		}
 	}
 }

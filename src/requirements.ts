@@ -2,11 +2,14 @@ import { execFile } from "child_process";
 import { readFileSync } from "fs";
 import { basename, join } from "path";
 
-// The pi extensions the panel is built around. The plugin installs the missing ones
-// through pi's own package manager (user scope, ~/.pi/agent/npm), so they are the same
-// copies a terminal pi uses rather than a second set that would register every tool twice.
+// The pi extensions the panel is built around. The plugin installs the missing ones through
+// pi's own package manager, into whichever config folder the panel's pi uses (see agentDir.ts).
 export const REQUIRED_PACKAGES = ["rpiv-advisor", "rpiv-args", "rpiv-ask-user-question", "rpiv-btw", "rpiv-todo", "rpiv-web-tools"] as const;
 const SCOPE = "@juicesharp";
+
+// Needed only by vaults that list MCP servers in .mcp.json: it is what makes pi read that file.
+export const MCP_ADAPTER = "pi-mcp-adapter";
+const sourceOf = (name: string) => (name === MCP_ADAPTER ? `npm:${name}` : `npm:${SCOPE}/${name}`);
 
 // Steph Ango's Obsidian skills. They are his, so the plugin doesn't carry a copy: pi fetches
 // them from his repository, and `pi update` keeps them current like any other package.
@@ -40,8 +43,8 @@ export function parsePiList(output: string): InstalledPackage[] {
 // By folder name, not by source: a package installed from a local checkout or a git
 // fork satisfies the requirement just as well, and installing the npm one on top of it
 // would load the extension twice.
-export function findRequired(installed: InstalledPackage[]): Map<string, InstalledPackage | null> {
-	return new Map(REQUIRED_PACKAGES.map((name) => [name, installed.find((p) => basename(p.path) === name) ?? null]));
+export function findRequired(installed: InstalledPackage[], extra: string[] = []): Map<string, InstalledPackage | null> {
+	return new Map([...REQUIRED_PACKAGES, ...extra].map((name) => [name, installed.find((p) => basename(p.path) === name) ?? null]));
 }
 
 // What tells one state of an installed package from the next: its npm version, or for a git
@@ -71,6 +74,8 @@ export function versionAt(path: string): string | null {
 export interface RequirementsHost {
 	piCommand(): Promise<{ binary: string; env: NodeJS.ProcessEnv; cwd: string }>;
 	enabled(): boolean;
+	// The vault has a .mcp.json, so pi needs the adapter that reads it.
+	wantsMcp(): boolean;
 	autoUpdate(): boolean;
 	// pi is in the middle of something in one of the tabs.
 	busy(): boolean;
@@ -82,6 +87,7 @@ export interface RequirementsHost {
 export class Requirements {
 	private ensuring: Promise<void> | null = null;
 	private updating: Promise<string[]> | null = null;
+	private listed: Promise<InstalledPackage[]> | null = null;
 	private installingSkills: Promise<boolean> | null = null;
 
 	constructor(private host: RequirementsHost) {}
@@ -96,12 +102,15 @@ export class Requirements {
 		});
 	}
 
-	async installed(): Promise<InstalledPackage[]> {
-		return parsePiList(await this.pi(["list"]));
+	// `pi list` takes a moment and every tab asks at start, so the answer is kept until something is installed or updated.
+	installed(): Promise<InstalledPackage[]> {
+		this.listed ??= this.pi(["list"]).then(parsePiList);
+		this.listed.catch(() => (this.listed = null));
+		return this.listed;
 	}
 
 	async status(): Promise<Map<string, InstalledPackage | null>> {
-		return findRequired(await this.installed());
+		return findRequired(await this.installed(), this.host.wantsMcp() ? [MCP_ADAPTER] : []);
 	}
 
 	// Installs whatever is missing. Runs once per Obsidian session however many chat tabs
@@ -113,7 +122,8 @@ export class Requirements {
 				const missing = [...(await this.status())].filter(([, pkg]) => pkg === null).map(([name]) => name);
 				for (const name of missing) {
 					onStatus(`Installing ${name}…`);
-					await this.pi(["install", `npm:${SCOPE}/${name}`]);
+					await this.pi(["install", sourceOf(name)]);
+					this.listed = null;
 				}
 				if (missing.length) this.host.notify(`Pi Harness installed ${missing.join(", ")}.`);
 			} catch (err) {
@@ -135,6 +145,7 @@ export class Requirements {
 			try {
 				onStatus(`Installing ${SKILLS_PACKAGE.name}…`);
 				await this.pi(["install", SKILLS_PACKAGE.source]);
+				this.listed = null;
 				this.host.notify(`Pi Harness installed ${SKILLS_PACKAGE.name}.`);
 				return true;
 			} catch (err) {
@@ -148,7 +159,7 @@ export class Requirements {
 	// pi itself, then every installed package, by folder name.
 	private async versions(): Promise<Map<string, string>> {
 		const versions = new Map([["pi", (await this.pi(["--version"])).trim()]]);
-		for (const pkg of parsePiList(await this.pi(["list"]))) {
+		for (const pkg of await this.installed()) {
 			const version = versionAt(pkg.path);
 			if (version) versions.set(basename(pkg.path), version);
 		}
@@ -165,6 +176,7 @@ export class Requirements {
 			try {
 				const before = await this.versions();
 				await this.pi(["update", "--all"]);
+				this.listed = null;
 				await this.host.setLastUpdate(Date.now());
 				return [...(await this.versions())].filter(([name, version]) => before.get(name) !== version).map(([name, version]) => `${name} ${version}`);
 			} finally {

@@ -14,6 +14,7 @@ export interface PiAgentSettings {
 	systemPromptAddendum: string;
 	extraArgs: string;
 	lastSessionFile: string;
+	isolate: boolean;
 	manageExtensions: boolean;
 	autoUpdate: boolean;
 	// The user has answered the offer to install missing extensions, either way.
@@ -34,6 +35,7 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	systemPromptAddendum: "",
 	extraArgs: "",
 	lastSessionFile: "",
+	isolate: true,
 	// Both download and run code from npm, so both wait for the user to say yes.
 	manageExtensions: false,
 	autoUpdate: false,
@@ -100,6 +102,16 @@ export class PiAgentSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl).setName("Extensions").setHeading();
+
+		new Setting(containerEl)
+			.setName("Keep the panel's pi separate from your terminal pi")
+			.setDesc("The panel's pi uses its own config folder (~/.pi/harness), so the packages, extensions, skills, subagents and MCP setup you have for pi in the terminal stay out of your vault. Your logins, custom models and session history are shared; default model and similar settings are copied over once. What this vault has in its own .pi folder still loads, if you have trusted the vault in pi. Reload pi after changing this.")
+			.addToggle((t) =>
+				t.setValue(s.isolate).onChange(async (v) => {
+					s.isolate = v;
+					await save();
+				}),
+			);
 
 		new Setting(containerEl)
 			.setName("Install missing pi extensions")

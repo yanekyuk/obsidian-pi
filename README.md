@@ -12,7 +12,7 @@ This plugin puts a coding agent in your vault. Read this first.
 - **Your notes leave your machine.** Whatever pi reads, plus the active note and selection when the note chip is on, is sent to the model provider you configured in pi. The plugin itself sends nothing anywhere and has no telemetry.
 - **Network use.** pi talks to your model provider and to whatever its tools reach (web search and fetch, MCP servers). The plugin makes two kinds of requests of its own: a local MCP `initialize` to the HTTP servers listed in the vault's `.mcp.json`, to warn you when one is down, and, only if you opt in, `pi install` / `pi update`, which download packages from npm and GitHub.
 - **Code from npm and GitHub, only if you say yes.** The panel works best with six third-party pi extensions and Steph Ango's Obsidian skills. The first time they are missing, the panel asks whether to install them; daily `pi update --all` is a separate switch that is off by default. Both are under Settings → Extensions.
-- **Files outside the vault.** pi keeps sessions under `~/.pi/agent/sessions`; "Move to trash" in the session list moves such a file to the system trash. Choosing an advisor model writes `~/.config/rpiv-advisor/advisor.json`. To find `pi` when Obsidian was started from the Dock, the plugin asks your login shell for its `PATH`.
+- **Files outside the vault.** The panel's pi keeps its config in `~/.pi/harness`, with links to your pi logins in `~/.pi/agent`. pi keeps sessions under `~/.pi/agent/sessions`; "Move to trash" in the session list moves such a file to the system trash. Choosing an advisor model writes `~/.config/rpiv-advisor/advisor.json`. To find `pi` when Obsidian was started from the Dock, the plugin asks your login shell for its `PATH`.
 
 ## What it does
 
@@ -55,9 +55,34 @@ A session file only ever belongs to one tab: opening a session that another tab 
 
 These are pi's normal session files for the vault directory, so a conversation started here can be resumed in a terminal with `pi --resume`, and the other way round. Renaming goes through pi, which only names the session it has loaded, so renaming another session opens it first. pi does not allow clearing a name over RPC.
 
+## Separate from your terminal pi
+
+The panel's pi has a config folder of its own, `~/.pi/harness`, so what you set up for pi in the terminal stays out of your vault: packages, extensions, skills, subagents, prompt templates and MCP overrides. The plugin installs what the panel needs (below) into that folder. This is what crosses over from `~/.pi/agent`, and nothing else does:
+
+| | How | Why |
+| --- | --- | --- |
+| `auth.json` | linked | Your logins. pi rewrites this file when it refreshes a token, so a link keeps both on the same tokens where a copy would go stale. |
+| `models.json` | linked | Custom models and providers. |
+| `mcp-oauth/` | linked | Logins for MCP servers that use OAuth. |
+| `settings.json` | a few keys copied once | Default provider, model and thinking level, enabled models, compaction, shell prefix. Never the package list. After that the panel's pi keeps its own settings. |
+| `trust.json` | the vault's decision | Whether you trusted this vault (or a folder above it) in pi. |
+| sessions | same folder as before | The history is one list, whichever pi wrote a session. |
+
+Skills in `~/.agents/skills` are left out too: the panel names the skills pi may load (those of installed packages, the vault's `.pi/skills` and `.agents/skills`, and the folders in the plugin settings) instead of letting pi look for them. Global MCP files outside `~/.pi` (`~/.config/mcp/mcp.json`, `~/.agents/mcp.json`) are the one thing pi's MCP adapter still reads.
+
+**What the vault has in its own `.pi` folder still loads**, once you have trusted the vault in pi. That is the place for anything you want in the panel but the plugin doesn't install, such as a login provider. From the vault folder:
+
+```bash
+pi install -l npm:pi-claude-oauth-adapter
+```
+
+Logins that depend on a provider package (the credentials are in `auth.json`, but the provider comes from a package) only show up in the panel once that package is installed this way.
+
+Turn the separation off under Settings → Extensions to have the panel's pi use `~/.pi/agent` like the terminal does.
+
 ## pi extensions the panel is built around
 
-The panel is built around six extensions from [rpiv](https://github.com/juicesharp/rpiv-mono). When some are missing, the panel asks once whether to install them. If you agree, the plugin checks `pi list` before pi starts and installs what is missing with `pi install npm:@juicesharp/<name>` (user scope, `~/.pi/agent/npm`, the same copies a terminal pi uses). A copy installed from a local folder or git counts as installed. Without them pi still works; the panel just has less to show. If you also turn on **Keep pi up to date**, once a day the plugin runs `pi update --all`, which updates pi itself and every installed package, not only these six. It waits until pi is idle in every tab, because the update replaces pi's files. When something changed you get a toast listing the new versions; click it to reload pi in the idle tabs, or use `/reload` or the ↻ button later. A running pi keeps the old code until then. Both switches are under Settings → Extensions, where you can also see what is installed and update on demand. Being offline only produces a notice; pi still starts.
+The panel is built around six extensions from [rpiv](https://github.com/juicesharp/rpiv-mono). A vault with a `.mcp.json` also gets [pi-mcp-adapter](https://www.npmjs.com/package/pi-mcp-adapter), which is what makes pi read that file. When some are missing, the panel asks once whether to install them. If you agree, the plugin checks `pi list` before pi starts and installs what is missing with `pi install npm:@juicesharp/<name>` (into the panel's own config folder, or `~/.pi/agent` when the separation is off). A copy installed from a local folder or git counts as installed. Without them pi still works; the panel just has less to show. If you also turn on **Keep pi up to date**, once a day the plugin runs `pi update --all`, which updates pi itself and every installed package, not only these six. It waits until pi is idle in every tab, because the update replaces pi's files. When something changed you get a toast listing the new versions; click it to reload pi in the idle tabs, or use `/reload` or the ↻ button later. A running pi keeps the old code until then. Both switches are under Settings → Extensions, where you can also see what is installed and update on demand. Being offline only produces a notice; pi still starts.
 
 | Extension | In the panel |
 | --- | --- |
