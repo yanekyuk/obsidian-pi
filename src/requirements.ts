@@ -134,6 +134,18 @@ export class Requirements {
 		return this.ensuring;
 	}
 
+	// For the package list in the settings tab: what the user would type after `pi install` / `pi remove`.
+	// `local` means the vault's own .pi folder instead of the panel's config folder.
+	async install(source: string, local: boolean): Promise<void> {
+		await this.pi(["install", ...(local ? ["-l"] : []), source]);
+		this.listed = null;
+	}
+
+	async remove(source: string, local: boolean): Promise<void> {
+		await this.pi(["remove", ...(local ? ["-l"] : []), source]);
+		this.listed = null;
+	}
+
 	// Whether these are needed is only known once pi is up and says which skills it found: a vault
 	// may bring its own in .pi/skills, and those count. Resolves to true when they were installed
 	// just now, which the running pi only notices after a reload.

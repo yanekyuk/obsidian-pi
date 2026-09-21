@@ -32,6 +32,7 @@ export { TOOL_RENDERERS } from ${JSON.stringify(join(root, "src/view/toolRendere
 export { summarize } from ${JSON.stringify(join(root, "src/view/TabSwitcher.ts"))};
 export { extractBundledFiles } from ${JSON.stringify(join(root, "src/bundled.ts"))};
 export { prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/agentDir.ts"))};
+export { disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } from ${JSON.stringify(join(root, "src/packages.ts"))};
 export { savedTabsFrom } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};`,
 );
 // sessions.ts reaches prompt.ts, which imports the Obsidian API; outside the app a stub will do.
@@ -46,7 +47,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, savedTabsFrom, extractBundledFiles, prepareAgentDir, sessionDirFor } =
+const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, savedTabsFrom, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -174,6 +175,30 @@ const check = (ok, label, detail = "") => {
 	check(!existsSync(join(bare, "settings.json")), "settings inheritance off: nothing is copied");
 
 	check(sessionDirFor("/Users/me/My Vault", "/u/.pi/agent") === "/u/.pi/agent/sessions/--Users-me-My Vault--", "sessions stay in the folder pi itself would use for the vault");
+}
+
+// ---- packages: switching one off and on again in pi's settings.json
+{
+	const { readFileSync } = await import("fs");
+	const file = join(work, "pkg-settings.json");
+	const filtered = { source: "npm:with-filter", skills: ["skills/keep"], note: "mine" };
+	writeFileSync(file, JSON.stringify({ defaultModel: "m", packages: ["npm:plain", filtered, { source: "npm:off", extensions: [], skills: [], prompts: [], themes: [] }] }));
+	const entries = await readPackageEntries(file);
+	check(entries.length === 3 && !isDisabled(entries[0]) && !isDisabled(entries[1]) && isDisabled(entries[2]), "packages: only an entry that loads nothing of any kind counts as off");
+	check(loadsAllSkills(entries[0]) && !loadsAllSkills(entries[1]) && !loadsAllSkills(entries[2]), "packages: a skills filter means the panel must not name that package's skills itself");
+
+	const before = await replacePackageEntry(file, "npm:with-filter", disabled);
+	let now = await readPackageEntries(file);
+	check(isDisabled(now[1]) && now[1].note === "mine" && JSON.parse(readFileSync(file, "utf8")).defaultModel === "m", "packages: off keeps the entry's other keys and the rest of the file");
+	await replacePackageEntry(file, "npm:with-filter", (entry) => enabled(entry, before));
+	now = await readPackageEntries(file);
+	check(JSON.stringify(now[1]) === JSON.stringify(filtered), "packages: on brings back the filters the entry had before");
+	await replacePackageEntry(file, "npm:plain", disabled);
+	await replacePackageEntry(file, "npm:plain", (entry) => enabled(entry));
+	await replacePackageEntry(file, "npm:off", (entry) => enabled(entry));
+	now = await readPackageEntries(file);
+	check(now[0] === "npm:plain" && now[2] === "npm:off", "packages: with nothing remembered, on means the plain source again");
+	check((await replacePackageEntry(file, "npm:absent", disabled)) === null, "packages: a source that isn't listed changes nothing");
 }
 
 // ---- tabs: what the title shows for the tabs out of sight, and what the layout brings back

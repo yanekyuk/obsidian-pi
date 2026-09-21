@@ -1,7 +1,7 @@
 import { Component, Keymap, Menu, Notice, TFile, setIcon, type App, type ItemView } from "obsidian";
 import { existsSync } from "fs";
 import { homedir } from "os";
-import { relative, resolve } from "path";
+import { basename, relative, resolve } from "path";
 import { readAdvisorConfig, writeAdvisorConfig } from "../advisor";
 import type PiAgentPlugin from "../main";
 import { probeMcp, unusableMcpServers, vaultMcpServers } from "../mcp";
@@ -454,6 +454,9 @@ export class ChatSession {
 	// needed shows only now that pi has listed its skills: ones in the vault's .pi/skills count.
 	private async ensureSkills(): Promise<void> {
 		if (this.hasObsidianSkills || !this.plugin.settings.manageExtensions) return;
+		// Installed but not loaded means the user switched the package off; that is not "missing".
+		const installed = await this.plugin.requirements.installed().catch(() => []);
+		if (installed.some((pkg) => basename(pkg.path) === SKILLS_PACKAGE.name)) return;
 		const installedNow = await this.plugin.requirements.installSkills((status) => this.setActivity(status));
 		this.setActivity(this.busy ? "Working…" : null);
 		// One reload, by whichever tab got here first while pi was at rest; the others pick them up on their next start.

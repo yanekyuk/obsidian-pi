@@ -75,7 +75,7 @@ The panel's pi has a config folder of its own, `~/.pi/harness`, so what you set 
 
 Switching something off removes the link the plugin made and never touches your own files. Packages you installed with `pi install` are not inherited one by one.
 
-**What the vault has in its own `.pi` folder is not inheritance and still loads**, once you have trusted the vault in pi. That is the place for anything you want in the panel but the plugin doesn't install, such as a login provider. From the vault folder:
+**What the vault has in its own `.pi` folder is not inheritance and still loads**, once you have trusted the vault in pi. That is the place for anything you want in the panel but the plugin doesn't install, such as a login provider. Install it from Settings → Extensions → Packages ("In this vault's .pi"), or from the vault folder:
 
 ```bash
 pi install -l npm:pi-claude-oauth-adapter
@@ -87,7 +87,14 @@ Turn **Keep the panel's pi separate** off to have the panel use `~/.pi/agent` as
 
 ## pi extensions the panel is built around
 
-The panel is built around six extensions from [rpiv](https://github.com/juicesharp/rpiv-mono). A vault with a `.mcp.json` also gets [pi-mcp-adapter](https://www.npmjs.com/package/pi-mcp-adapter), which is what makes pi read that file. When some are missing, the panel asks once whether to install them. If you agree, the plugin checks `pi list` before pi starts and installs what is missing with `pi install npm:@juicesharp/<name>` (into the panel's own config folder, or `~/.pi/agent` when the separation is off). A copy installed from a local folder or git counts as installed. Without them pi still works; the panel just has less to show. If you also turn on **Keep pi up to date**, once a day the plugin runs `pi update --all`, which updates pi itself and every installed package, not only these six. It waits until pi is idle in every tab, because the update replaces pi's files. When something changed you get a toast listing the new versions; click it to reload pi in the idle tabs, or use `/reload` or the ↻ button later. A running pi keeps the old code until then. Both switches are under Settings → Extensions, where you can also see what is installed and update on demand. Being offline only produces a notice; pi still starts.
+The panel is built around six extensions from [rpiv](https://github.com/juicesharp/rpiv-mono). A vault with a `.mcp.json` also gets [pi-mcp-adapter](https://www.npmjs.com/package/pi-mcp-adapter), which is what makes pi read that file. When some are missing, the panel asks once whether to install them. If you agree, the plugin checks `pi list` before pi starts and installs what is missing with `pi install npm:@juicesharp/<name>` (into the panel's own config folder, or `~/.pi/agent` when the separation is off). A copy installed from a local folder or git counts as installed. Without them pi still works; the panel just has less to show. If you also turn on **Keep pi up to date**, once a day the plugin runs `pi update --all`, which updates pi itself and every installed package, not only these six. It waits until pi is idle in every tab, because the update replaces pi's files. When something changed you get a toast listing the new versions; click it to reload pi in the idle tabs, or use `/reload` or the ↻ button later. A running pi keeps the old code until then. Both switches are under Settings → Extensions.
+
+**Settings → Extensions → Packages** lists every package the panel's pi loads, from its own config folder and from the vault's `.pi` folder, the ones the plugin installed and the ones you added:
+
+- A switch turns a package off without removing it. It is pi's own kind of off (what `pi config` does): the entry in `settings.json` gets an empty list for every kind of resource, so nothing of it loads. Switching it on again brings back the filters the entry had before.
+- **Install a package** runs `pi install` for you, into the panel's config folder or into the vault's `.pi` (`pi install -l`). The trash button runs `pi remove`. Packages the plugin installed can be switched off but not removed from here.
+- **Update now** runs `pi update --all`.
+- Reload pi (↻) to apply a change. With the separation switched off, the first list is your terminal pi's own and is shown read-only. Being offline only produces a notice; pi still starts.
 
 | Extension | In the panel |
 | --- | --- |

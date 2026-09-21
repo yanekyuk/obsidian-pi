@@ -1,8 +1,10 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type PiAgentPlugin from "./main";
 import { basename } from "path";
 import { DEFAULT_INHERITANCE, type Inheritance } from "./agentDir";
-import { REQUIRED_PACKAGES, SKILLS_PACKAGE, findRequired } from "./requirements";
+import { disabled, enabled, isDisabled, readPackageEntries, replacePackageEntry, sourceOf, type PackageEntry } from "./packages";
+import { confirmAction } from "./view/modals";
+import { MCP_ADAPTER, REQUIRED_PACKAGES, SKILLS_PACKAGE } from "./requirements";
 
 export interface PiAgentSettings {
 	piPath: string;
@@ -22,6 +24,8 @@ export interface PiAgentSettings {
 	// The user has answered the offer to install missing extensions, either way.
 	extensionsOfferAnswered: boolean;
 	lastExtensionUpdate: number;
+	// Package entries as they were before being switched off here, so their own filters come back. Keyed by settings file and source.
+	rememberedPackages: Record<string, PackageEntry>;
 	hiddenTodos: Record<string, string[]>;
 	connectMcpOnStart: boolean;
 }
@@ -44,6 +48,7 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	autoUpdate: false,
 	extensionsOfferAnswered: false,
 	lastExtensionUpdate: 0,
+	rememberedPackages: {},
 	hiddenTodos: {},
 	connectMcpOnStart: true,
 };
@@ -166,18 +171,8 @@ export class PiAgentSettingTab extends PluginSettingTab {
 				}),
 			);
 
-		const status = new Setting(containerEl).setName("Installed").setDesc("Checking…");
-		status.addButton((b) => b.setButtonText("Update now").onClick(() => void this.plugin.updateExtensions(true).then(() => this.display())));
-		void this.plugin.requirements
-			.installed()
-			.then((installed) => {
-				const found = findRequired(installed);
-				const skills = installed.find((pkg) => basename(pkg.path) === SKILLS_PACKAGE.name);
-				const lines = [...found].map(([name, pkg]) => `${name}: ${pkg ? pkg.source : "missing"}`);
-				lines.push(`${SKILLS_PACKAGE.name}: ${skills ? skills.source : "not installed through pi (skills in the vault's .pi/skills count too)"}`);
-				status.setDesc(createFragment((f) => lines.forEach((line) => f.createDiv({ text: line }))));
-			})
-			.catch((err: Error) => status.setDesc(`Couldn't run pi list: ${err.message}`));
+		const packagesEl = containerEl.createDiv();
+		void this.renderPackages(packagesEl);
 
 		new Setting(containerEl)
 			.setName("Connect the vault's MCP servers when pi starts")
@@ -244,5 +239,81 @@ export class PiAgentSettingTab extends PluginSettingTab {
 			cls: "setting-item-description",
 			text: "Changes to the pi section and to skills take effect the next time pi starts (the panel's ↻ button, or /reload).",
 		});
+	}
+
+	// Every package the panel's pi loads, from its own config folder and from the vault's .pi folder,
+	// with a switch each. Off is pi's own kind of off: the package stays installed and loads nothing.
+	private async renderPackages(el: HTMLElement): Promise<void> {
+		const { plugin } = this;
+		const s = plugin.settings;
+		const header = new Setting(el).setName("Packages").setDesc("Checking…");
+		header.addButton((b) => b.setButtonText("Update now").onClick(() => void plugin.updateExtensions(true).then(() => this.display())));
+
+		const installed = await plugin.requirements.installed().catch((err: Error) => err);
+		if (installed instanceof Error) return void header.setDesc(`Couldn't run pi list: ${installed.message}`);
+		header.setDesc("What the panel's pi loads. Switching a package off keeps it installed but loads nothing from it. Reload pi (the panel's ↻ button) to apply a change.");
+
+		const required = new Set<string>([...REQUIRED_PACKAGES, MCP_ADAPTER, SKILLS_PACKAGE.name]);
+		const scopes = [
+			{ file: plugin.panelSettingsFile, local: false, label: s.isolate ? "the panel's pi" : "your pi, shared with the terminal", editable: s.isolate },
+			{ file: plugin.vaultSettingsFile, local: true, label: "this vault's .pi folder", editable: true },
+		];
+		const seen = new Set<string>();
+		for (const scope of scopes) {
+			for (const entry of await readPackageEntries(scope.file)) {
+				const source = sourceOf(entry);
+				const path = installed.find((pkg) => pkg.source === source)?.path;
+				const name = path ? basename(path) : source;
+				seen.add(name);
+				const row = new Setting(el).setName(name).setDesc([source, scope.label, required.has(name) ? "installed by the plugin" : null, path ? null : "not installed yet"].filter(Boolean).join(" · "));
+				if (!required.has(name) && scope.editable) {
+					row.addExtraButton((b) =>
+						b.setIcon("trash-2").setTooltip("Remove (pi remove)").onClick(async () => {
+							if (!(await confirmAction(this.app, "Remove this package?", `pi remove ${source}`, "Remove"))) return;
+							await plugin.requirements.remove(source, scope.local).catch((err: Error) => new Notice(`pi: ${err.message}`, 8000));
+							this.display();
+						}),
+					);
+				}
+				row.addToggle((t) =>
+					t
+						.setValue(!isDisabled(entry))
+						.setDisabled(!scope.editable)
+						.setTooltip(scope.editable ? "" : "Shared with your terminal pi. Change it there with pi config.")
+						.onChange(async (on) => {
+							const key = `${scope.file}::${source}`;
+							const before = await replacePackageEntry(scope.file, source, (current) => (on ? enabled(current, s.rememberedPackages[key]) : disabled(current))).catch((err: Error) => void new Notice(`Couldn't change ${scope.file}: ${err.message}`, 8000));
+							const { [key]: _forgotten, ...rest } = s.rememberedPackages;
+							s.rememberedPackages = !on && before && !isDisabled(before) ? { ...rest, [key]: before } : rest;
+							await plugin.saveSettings();
+						}),
+				);
+			}
+		}
+		for (const name of [...REQUIRED_PACKAGES].filter((n) => !seen.has(n))) new Setting(el).setName(name).setDesc("Missing. It is installed when pi next starts, if installing is switched on above.");
+
+		let source = "";
+		let local = false;
+		new Setting(el)
+			.setName("Install a package")
+			.setDesc("Same as pi install: npm:package, git:github.com/user/repo or a folder. For example a login provider such as npm:pi-claude-oauth-adapter. Packages run with full access to your system, so install only what you trust.")
+			.addText((t) => t.setPlaceholder("npm:package").onChange((v) => (source = v.trim())))
+			.addDropdown((d) =>
+				d
+					.addOption("panel", s.isolate ? "For the panel's pi" : "For your pi")
+					.addOption("vault", "In this vault's .pi")
+					.onChange((v) => (local = v === "vault")),
+			)
+			.addButton((b) =>
+				b.setButtonText("Install").onClick(async () => {
+					if (!source) return;
+					b.setDisabled(true).setButtonText("Installing…");
+					await plugin.requirements.install(source, local).then(
+						() => new Notice(`Installed ${source}. Reload pi to use it.`),
+						(err: Error) => new Notice(`pi: ${err.message}`, 10000),
+					);
+					this.display();
+				}),
+			);
 	}
 }

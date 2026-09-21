@@ -2,7 +2,8 @@ import { FileSystemAdapter, Notice, Plugin, addIcon, type Editor } from "obsidia
 import { existsSync, promises as fs } from "fs";
 import { homedir } from "os";
 import { basename, delimiter, isAbsolute, join, resolve } from "path";
-import { DEFAULT_INHERITANCE, USER_AGENT_DIR, prepareAgentDir, sessionDirFor } from "./agentDir";
+import { DEFAULT_INHERITANCE, HARNESS_AGENT_DIR, USER_AGENT_DIR, prepareAgentDir, sessionDirFor } from "./agentDir";
+import { loadsAllSkills, readPackageEntries, sourceOf } from "./packages";
 import { MCP_ADAPTER, Requirements } from "./requirements";
 import { extractBundledFiles } from "./bundled";
 import { resolveEnv } from "./env";
@@ -138,6 +139,15 @@ export default class PiAgentPlugin extends Plugin {
 		return { binary: this.settings.piPath, env: await this.piEnv(), cwd: this.vaultPath };
 	}
 
+	// The settings files pi reads its package lists from: the panel's pi, and the vault's own .pi folder.
+	get panelSettingsFile(): string {
+		return join(this.settings.isolate ? HARNESS_AGENT_DIR : USER_AGENT_DIR, "settings.json");
+	}
+
+	get vaultSettingsFile(): string {
+		return join(this.vaultPath, ".pi", "settings.json");
+	}
+
 	// The environment every pi the plugin starts runs in: the chat, side questions, installs and updates.
 	private async piEnv(): Promise<NodeJS.ProcessEnv> {
 		const env = { ...(await resolveEnv()) };
@@ -224,7 +234,11 @@ export default class PiAgentPlugin extends Plugin {
 			args.push("--no-skills");
 			if (s.inherit.sessions) args.push("--session-dir", sessionDirFor(vault));
 			const packages = await this.requirements.installed().catch(() => []);
-			skillDirs.unshift(...packages.map((pkg) => join(pkg.path, "skills")));
+			// Naming a skills folder would load it whatever the package's entry says, so a package
+			// that is switched off, or whose skills the user has narrowed down, is not named.
+			const entries = [...(await readPackageEntries(this.panelSettingsFile)), ...(await readPackageEntries(this.vaultSettingsFile))];
+			const narrowed = new Set(entries.filter((entry) => !loadsAllSkills(entry)).map(sourceOf));
+			skillDirs.unshift(...packages.filter((pkg) => !narrowed.has(pkg.source)).map((pkg) => join(pkg.path, "skills")));
 			if (await this.vaultIsTrusted(env)) skillDirs.push(join(vault, ".pi", "skills"), join(vault, ".agents", "skills"));
 			if (s.inherit.skills) skillDirs.push(join(homedir(), ".agents", "skills"), join(USER_AGENT_DIR, "skills"));
 			// The flag belongs to the adapter; pi refuses flags nobody registered.
