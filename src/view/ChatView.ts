@@ -85,6 +85,15 @@ export class ChatView extends ItemView {
 		await super.setState(state, result);
 	}
 
+	// Takes on tabs from somewhere else (a panel left over from before the plugin was renamed).
+	// A session that is already open in some tab is not opened twice.
+	adoptTabs(tabs: SavedTab[]): void {
+		const wanted = tabs.filter((tab) => existsSync(tab.sessionFile) && !this.plugin.holderOf(tab.sessionFile));
+		if (this.ready) for (const tab of wanted) this.addTab(tab, false);
+		else this.saved = { tabs: [...(this.saved?.tabs ?? []), ...wanted.filter((tab) => !this.saved?.tabs.some((t) => t.sessionFile === tab.sessionFile))], active: this.saved?.active ?? 0 };
+		this.app.workspace.requestSaveLayout();
+	}
+
 	async onOpen(): Promise<void> {
 		this.buildDom();
 		this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.active?.renderNoteChip()));

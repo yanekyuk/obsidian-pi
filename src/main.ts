@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Notice, Plugin, addIcon, type Editor } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, addIcon, type Editor, type WorkspaceLeaf } from "obsidian";
 import { existsSync, promises as fs } from "fs";
 import { homedir } from "os";
 import { basename, delimiter, isAbsolute, join, resolve } from "path";
@@ -13,8 +13,10 @@ import type { PiSpawnOptions } from "./rpc/PiRpcClient";
 import { DEFAULT_SETTINGS, PiAgentSettingTab, type PiAgentSettings } from "./settings";
 import type { ChatSession } from "./view/ChatSession";
 import { ChatView, VIEW_TYPE_PI } from "./view/ChatView";
+import { savedTabsFrom } from "./view/savedTabs";
 
 const MAX_SESSIONS_WITH_HIDDEN_TODOS = 30;
+const LEGACY_VIEW_TYPE = "pi-agent-chat";
 const UPDATE_CHECK_MS = 20 * 60 * 1000;
 const PI_ICON = `<path d="M18 30h64M38 30v46M64 30v34c0 8 4 12 12 12" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`;
 
@@ -51,6 +53,7 @@ export default class PiAgentPlugin extends Plugin {
 		if (this.manifest.dir) await extractBundledFiles(join(this.vaultPath, this.manifest.dir)).catch((err) => console.warn("[pi-harness] couldn't write the bundled launcher", err));
 
 		this.registerView(VIEW_TYPE_PI, (leaf) => new ChatView(leaf, this));
+		this.app.workspace.onLayoutReady(() => void this.adoptLegacyPanels());
 		this.registerHoverLinkSource(VIEW_TYPE_PI, { display: "Pi Harness", defaultMod: true });
 		this.addSettingTab(new PiAgentSettingTab(this.app, this));
 		this.addRibbonIcon("pi", "Open pi", () => void this.activateView());
@@ -139,6 +142,30 @@ export default class PiAgentPlugin extends Plugin {
 	// How to run the pi binary for anything other than the chat process itself.
 	async piCommand(): Promise<{ binary: string; env: NodeJS.ProcessEnv; cwd: string }> {
 		return { binary: this.settings.piPath, env: await this.piEnv(), cwd: this.vaultPath };
+	}
+
+	// Before it was published the plugin was called Pi Agent, and its panels are still in the
+	// workspace layout under that name's view type, as dead panes holding their open tabs. Their
+	// tabs move to a live panel and the dead pane is closed. Another plugin now owns that name, so
+	// a pane is only touched when that plugin isn't running and the state in it is plainly ours.
+	private async adoptLegacyPanels(): Promise<void> {
+		const { workspace } = this.app;
+		if (this.isPluginEnabled("pi-agent")) return;
+		const legacy: WorkspaceLeaf[] = [];
+		workspace.iterateAllLeaves((leaf) => {
+			if (leaf.getViewState().type === LEGACY_VIEW_TYPE) legacy.push(leaf);
+		});
+		for (const leaf of legacy) {
+			const saved = savedTabsFrom(leaf.getViewState().state);
+			if (!saved?.tabs.length || !saved.tabs.every((tab) => tab.sessionFile.endsWith(".jsonl"))) continue;
+			const live = this.chatViews()[0];
+			if (live) {
+				live.adoptTabs(saved.tabs);
+				leaf.detach();
+			} else {
+				await leaf.setViewState({ type: VIEW_TYPE_PI, state: { tabs: saved.tabs, active: saved.active } });
+			}
+		}
 	}
 
 	// The settings files pi reads its package lists from: the panel's pi, and the vault's own .pi folder.
