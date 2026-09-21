@@ -34,7 +34,7 @@ mkdirSync(dest, { recursive: true });
 
 for (const file of ["main.js", "manifest.json", "styles.css"]) cpSync(join(root, file), join(dest, file));
 // Replace rather than merge, so files removed from the repo don't linger. data.json is left alone.
-for (const dir of ["bin"]) {
+for (const dir of ["bin", "pi-extension"]) {
 	rmSync(join(dest, dir), { recursive: true, force: true });
 	cpSync(join(root, dir), join(dest, dir), { recursive: true });
 }

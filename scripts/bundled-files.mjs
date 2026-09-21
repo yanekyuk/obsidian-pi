@@ -3,10 +3,10 @@ import { dirname, join, relative, resolve } from "path";
 import { fileURLToPath } from "url";
 
 // Obsidian's plugin installer downloads main.js, manifest.json and styles.css and nothing else,
-// so the launcher for Obsidian's CLI travels inside main.js and is written out when the plugin
-// loads (src/bundled.ts). This esbuild plugin provides them as the "bundled-files" module.
+// so the launcher for Obsidian's CLI and the plugin's own pi extension travel inside main.js and
+// are written out when the plugin loads (src/bundled.ts). This esbuild plugin provides them as the "bundled-files" module.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const BUNDLED_DIRS = ["bin"].map((dir) => join(root, dir));
+const BUNDLED_DIRS = ["bin", "pi-extension"].map((dir) => join(root, dir));
 const filesUnder = (dir) =>
 	readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? filesUnder(join(dir, e.name)) : e.name === ".DS_Store" ? [] : [join(dir, e.name)]));
 

@@ -12,6 +12,7 @@ This plugin puts a coding agent in your vault. Read this first.
 - **Your notes leave your machine.** Whatever pi reads, plus the active note and selection when the note chip is on, is sent to the model provider you configured in pi. The plugin itself sends nothing anywhere and has no telemetry.
 - **Network use.** pi talks to your model provider and to whatever its tools reach (web search and fetch, MCP servers). The plugin makes two kinds of requests of its own: a local MCP `initialize` to the HTTP servers listed in the vault's `.mcp.json`, to warn you when one is down, and, only if you opt in, `pi install` / `pi update`, which download packages from npm and GitHub.
 - **Code from npm and GitHub, only if you say yes.** The panel works best with six third-party pi extensions and Steph Ango's Obsidian skills. The first time they are missing, the panel asks whether to install them; daily `pi update --all` is a separate switch that is off by default. Both are under Settings → Extensions.
+- **The web viewer, only if you switch it on.** pi can then open, read and operate pages in Obsidian's web viewer, where you may be logged in to sites. See [Web viewer](#web-viewer).
 - **Files outside the vault.** The panel's pi keeps its config in `~/.pi/harness`, with links to your pi logins in `~/.pi/agent`. pi keeps sessions under `~/.pi/agent/sessions`; "Move to trash" in the session list moves such a file to the system trash. Choosing an advisor model writes `~/.config/rpiv-advisor/advisor.json`. To find `pi` when Obsidian was started from the Dock, the plugin asks your login shell for its `PATH`.
 
 ## What it does
@@ -54,6 +55,23 @@ Starting something new never interrupts pi. **New session** (`+`) and opening a 
 A session file only ever belongs to one tab: opening a session that another tab holds takes you to that tab, because two pi processes writing one file would corrupt it. The plugin can't see pi running in a terminal, so avoid having the same session open in both at once. **Open another chat panel** (command palette) adds a second panel with tabs of its own, for two conversations side by side.
 
 These are pi's normal session files for the vault directory, so a conversation started here can be resumed in a terminal with `pi --resume`, and the other way round. Renaming goes through pi, which only names the session it has loaded, so renaming another session opens it first. pi does not allow clearing a name over RPC.
+
+## Web viewer
+
+Obsidian can open web pages in a tab (the Web viewer core plugin). With **Settings → Let pi use the web viewer** switched on, pi can drive it, and you watch it happen:
+
+| Tool | What it does |
+| --- | --- |
+| `browser_open` | Opens an address in a web viewer tab and waits for it to load. The tab comes to the front of its pane; the keyboard stays in the chat. |
+| `browser_read` | The visible text of the page, or of one element, optionally with its links. Without a page of its own, pi reads the web viewer tab you have open. |
+| `browser_click` | Clicks by CSS selector, or by the visible text of a link or button, and waits for any navigation. |
+| `browser_type` | Types into a field, optionally submitting. |
+| `browser_screenshot` | A picture of what the tab shows, which also appears on the tool card. |
+| `browser_eval` | Runs JavaScript in the page and returns the result. |
+
+It is off by default, for a reason: the web viewer keeps you logged in to sites, so pi acts there as you, and a page pi reads can contain text written to steer it. Switch it on when you want it.
+
+How it works: the tools are a small pi extension that ships inside the plugin. pi is a child process and the web viewer lives inside Obsidian, so a tool call crosses over on the channel the two already share, a dialog request that the panel recognises and answers itself. No port is opened and nothing else on the machine can reach it.
 
 ## Separate from your terminal pi
 

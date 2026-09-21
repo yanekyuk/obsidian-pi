@@ -28,6 +28,7 @@ export interface PiAgentSettings {
 	rememberedPackages: Record<string, PackageEntry>;
 	hiddenTodos: Record<string, string[]>;
 	connectMcpOnStart: boolean;
+	browserControl: boolean;
 }
 
 export const DEFAULT_SETTINGS: PiAgentSettings = {
@@ -51,6 +52,7 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	rememberedPackages: {},
 	hiddenTodos: {},
 	connectMcpOnStart: true,
+	browserControl: false,
 };
 
 export class PiAgentSettingTab extends PluginSettingTab {
@@ -173,6 +175,16 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		const packagesEl = containerEl.createDiv();
 		void this.renderPackages(packagesEl);
+
+		new Setting(containerEl)
+			.setName("Let pi use the web viewer")
+			.setDesc("Gives pi tools to open pages in Obsidian's web viewer, read them, click, type, take a screenshot and run scripts in them. You watch it happen in a tab. The web viewer keeps you logged in to sites, so pi acts there as you, and a page it reads can contain text that tries to steer it: leave this off unless you want it. Needs the Web viewer core plugin. Reload pi after changing this.")
+			.addToggle((t) =>
+				t.setValue(s.browserControl).onChange(async (v) => {
+					s.browserControl = v;
+					await save();
+				}),
+			);
 
 		new Setting(containerEl)
 			.setName("Connect the vault's MCP servers when pi starts")

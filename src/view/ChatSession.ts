@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import { homedir } from "os";
 import { basename, relative, resolve } from "path";
 import { readAdvisorConfig, writeAdvisorConfig } from "../advisor";
+import { BROWSER_CHANNEL } from "../browser";
 import type PiAgentPlugin from "../main";
 import { probeMcp, unusableMcpServers, vaultMcpServers } from "../mcp";
 import { readActiveContext, splitContext, withContext } from "../prompt";
@@ -1025,6 +1026,13 @@ export class ChatSession {
 	}
 
 	private onExtensionUi(req: ExtensionUiRequest): void {
+		// Not a question for the user: one of pi's browser_* tools asking Obsidian to act (see browser.ts).
+		if (req.method === "input" && req.title === BROWSER_CHANNEL) {
+			void this.plugin.browser.handle(req.placeholder).then((value) => {
+				if (this.client.running) this.client.respondToUi(req.id, { value });
+			});
+			return;
+		}
 		switch (req.method) {
 			case "select":
 			case "confirm":

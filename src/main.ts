@@ -5,6 +5,7 @@ import { basename, delimiter, isAbsolute, join, resolve } from "path";
 import { DEFAULT_INHERITANCE, HARNESS_AGENT_DIR, USER_AGENT_DIR, prepareAgentDir, sessionDirFor } from "./agentDir";
 import { loadsAllSkills, readPackageEntries, sourceOf } from "./packages";
 import { MCP_ADAPTER, Requirements } from "./requirements";
+import { BrowserControl } from "./browser";
 import { extractBundledFiles } from "./bundled";
 import { resolveEnv } from "./env";
 import { buildSystemPrompt } from "./prompt";
@@ -19,6 +20,7 @@ const PI_ICON = `<path d="M18 30h64M38 30v46M64 30v34c0 8 4 12 12 12" fill="none
 
 export default class PiAgentPlugin extends Plugin {
 	settings: PiAgentSettings = DEFAULT_SETTINGS;
+	browser = new BrowserControl(this.app);
 
 	requirements = new Requirements({
 		piCommand: () => this.piCommand(),
@@ -246,6 +248,9 @@ export default class PiAgentPlugin extends Plugin {
 			if (!s.inherit.mcpServers && existsSync(mcpConfig) && packages.some((pkg) => basename(pkg.path) === MCP_ADAPTER)) args.push("--mcp-config", mcpConfig);
 		}
 		for (const dir of new Set(skillDirs)) if (existsSync(dir)) args.push("--skill", dir);
+
+		// pi's browser_* tools for Obsidian's web viewer; the file is unpacked next to main.js (see bundled.ts).
+		if (s.browserControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "browser.ts"));
 
 		// Naive split is enough for flags; quote-aware parsing isn't worth it here.
 		args.push(...s.extraArgs.split(/\s+/).filter(Boolean));

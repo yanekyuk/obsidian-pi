@@ -94,7 +94,7 @@ const check = (ok, label, detail = "") => {
 			return false;
 		}
 	};
-	check(same("bin"), "bin/ unpacks from the bundle exactly as it is in the repo");
+	check(same("bin") && same("pi-extension"), "bin/ and pi-extension/ unpack from the bundle exactly as they are in the repo");
 	check((statSync(join(target, "bin/obsidian")).mode & 0o111) !== 0, "the CLI launcher is executable after unpacking");
 	writeFileSync(join(target, "bin/obsidian"), "tampered");
 	await extractBundledFiles(target);
@@ -199,6 +199,27 @@ const check = (ok, label, detail = "") => {
 	now = await readPackageEntries(file);
 	check(now[0] === "npm:plain" && now[2] === "npm:off", "packages: with nothing remembered, on means the plain source again");
 	check((await replacePackageEntry(file, "npm:absent", disabled)) === null, "packages: a source that isn't listed changes nothing");
+}
+
+// ---- web viewer: the scripts sent into the page, built minified the way the released main.js is
+{
+	const out = join(work, "browser.min.mjs");
+	await esbuild.build({ entryPoints: [join(root, "src/browser.ts")], bundle: true, minify: true, platform: "node", format: "esm", target: "es2020", outfile: out, logLevel: "error", plugins: [obsidianStub] });
+	const { inPage, readPage, clickOnPage, typeOnPage } = await import(pathToFileURL(out).href);
+	const clicked = [];
+	const link = { innerText: "Sign  in\nnow", title: "", href: "https://example.com/login", offsetParent: {}, getAttribute: () => null, scrollIntoView() {}, click: () => clicked.push("link") };
+	const body = { innerText: "Hello page. ".repeat(10), querySelectorAll: () => [link] };
+	const run = (code, document) => new Function("document", "getComputedStyle", `return ${code}`)(document, () => ({ position: "static" }));
+	const page = { body, querySelector: (sel) => (sel === "#main" ? body : null), querySelectorAll: () => [link] };
+
+	const read = run(inPage(readPage, null, true, 50, 10), page);
+	check(read.text.length === 50 && read.truncated === true && read.links[0].text === "Sign in now" && read.links[0].href === "https://example.com/login", "web viewer: reading a page gives capped text and tidy links, from minified code");
+	check(run(inPage(readPage, "#nope", false, 50, 10), page).error?.includes("#nope"), "web viewer: a selector that matches nothing is reported, not thrown");
+	run(inPage(clickOnPage, null, "sign in"), page);
+	check(clicked.length === 1 && run(inPage(clickOnPage, null, "no such button"), page).error, "web viewer: clicking by visible text finds the link; a miss is reported");
+	const hostile = 'x"); globalThis.__pwned = true; ("';
+	run(inPage(readPage, hostile, false, 50, 10), page);
+	check(globalThis.__pwned === undefined && run(inPage(typeOnPage, hostile, "t", false), page).error, "web viewer: arguments travel as data and can't break out into the page script");
 }
 
 // ---- tabs: what the title shows for the tabs out of sight, and what the layout brings back
