@@ -1262,3 +1262,23 @@ textarea.pi-input:active {
 	gap: var(--size-4-2);
 	color: var(--text-muted);
 }
+
+/* ---- model picker: scoped / all, as in pi's own selector ---- */
+
+.pi-model-scope {
+	display: flex;
+	gap: var(--size-2-3);
+	padding: var(--size-4-2) var(--size-4-3) 0;
+}
+.pi-model-scope .pi-pill.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+.pi-model-note {
+	margin-left: var(--size-4-2);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.pi-model-unavailable {
+	color: var(--text-faint);
+}

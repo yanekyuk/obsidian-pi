@@ -15,6 +15,7 @@ import { AttachmentTray, imageFilesOf, imageSrc } from "./Attachments";
 import { MarkdownBlock, ThinkingBlock, ToolCard, type RenderHost } from "./blocks";
 import { ComposerSuggest } from "./ComposerSuggest";
 import { InlineDialogs } from "./InlineDialogs";
+import { readEnabledModels, scopeModels } from "../models";
 import { renderInline } from "./markdown";
 import { ModelPicker, pickOne, promptText } from "./modals";
 import { SideQuestions } from "./SideQuestion";
@@ -867,15 +868,27 @@ export class ChatSession {
 	private async pickModel(): Promise<void> {
 		if (!this.client.running) return;
 		const models = await this.client.getAvailableModels();
-		new ModelPicker(this.app, models, async (model) => {
-			try {
-				await this.client.setModel(model.provider, model.id);
-				this.state = await this.client.getState();
-				this.renderControls();
-			} catch (err) {
-				new Notice(`pi: ${(err as Error).message}`);
-			}
-		}).open();
+		const scoped = scopeModels(await readEnabledModels(this.plugin.panelSettingsFile), models);
+		new ModelPicker(
+			this.app,
+			models,
+			scoped,
+			this.state?.model ?? null,
+			this.plugin.settings.showAllModels,
+			async (model) => {
+				try {
+					await this.client.setModel(model.provider, model.id);
+					this.state = await this.client.getState();
+					this.renderControls();
+				} catch (err) {
+					new Notice(`pi: ${(err as Error).message}`);
+				}
+			},
+			(showAll) => {
+				this.plugin.settings.showAllModels = showAll;
+				void this.plugin.saveSettings();
+			},
+		).open();
 	}
 
 	private async pickThinking(evt: MouseEvent): Promise<void> {

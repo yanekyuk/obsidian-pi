@@ -33,6 +33,7 @@ export { summarize } from ${JSON.stringify(join(root, "src/view/TabSwitcher.ts")
 export { extractBundledFiles } from ${JSON.stringify(join(root, "src/bundled.ts"))};
 export { prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/agentDir.ts"))};
 export { disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } from ${JSON.stringify(join(root, "src/packages.ts"))};
+export { scopeModels } from ${JSON.stringify(join(root, "src/models.ts"))};
 export { savedTabsFrom, panelsIn } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};`,
 );
 // sessions.ts reaches prompt.ts, which imports the Obsidian API; outside the app a stub will do.
@@ -47,7 +48,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } =
+const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -220,6 +221,18 @@ const check = (ok, label, detail = "") => {
 	const hostile = 'x"); globalThis.__pwned = true; ("';
 	run(inPage(readPage, hostile, false, 50, 10), page);
 	check(globalThis.__pwned === undefined && run(inPage(typeOnPage, hostile, "t", false), page).error, "web viewer: arguments travel as data and can't break out into the page script");
+}
+
+// ---- scoped models: pi's enabledModels patterns against what pi can actually use
+{
+	const m = (provider, id, name = id) => ({ provider, id, name });
+	const available = [m("anthropic", "claude-sonnet-5"), m("anthropic", "claude-sonnet-5-20260301"), m("anthropic", "claude-opus-5"), m("openai-codex", "gpt-5.6-sol"), m("openai-codex", "gpt-5.6-luna")];
+	const ids = (r) => r.models.map((x) => x.id).join();
+	const exact = scopeModels(["openai-codex/gpt-5.6-sol", "anthropic/claude-opus-5:high", "antigravity/gemini-3.8-flash"], available);
+	check(ids(exact) === "gpt-5.6-sol,claude-opus-5" && exact.unavailable.join() === "antigravity/gemini-3.8-flash", "scoped models: exact names in the order given, thinking suffix ignored, a provider pi doesn't have is reported", exact.unavailable.join());
+	check(ids(scopeModels(["*sonnet*", "OPENAI-CODEX/*"], available)) === "claude-sonnet-5,claude-sonnet-5-20260301,gpt-5.6-sol,gpt-5.6-luna", "scoped models: globs match the id or provider/id, case-insensitively");
+	check(ids(scopeModels(["sonnet", "sonnet"], available)) === "claude-sonnet-5", "scoped models: a partial name stands for one model, and nothing is listed twice");
+	check(scopeModels([], available).models.length === 0 && scopeModels(["a.b"], [m("x", "aXb")]).models.length === 0, "scoped models: no patterns, no scope; a dot is a dot");
 }
 
 // ---- tabs: what the title shows for the tabs out of sight, and what the layout brings back

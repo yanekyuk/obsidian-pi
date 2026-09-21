@@ -1,23 +1,80 @@
-import { App, FuzzySuggestModal, Modal } from "obsidian";
+import { App, FuzzySuggestModal, Modal, Notice, type FuzzyMatch } from "obsidian";
+import type { ScopedModels } from "../models";
 import type { Model } from "../rpc/types";
 
-export class ModelPicker extends FuzzySuggestModal<Model> {
+type ModelChoice = { model: Model; unavailable?: undefined } | { model?: undefined; unavailable: string };
+
+// pi's model selector: the scoped models first (the short list from enabledModels), all models a
+// click or Tab away. Scoped entries pi can't use right now are listed too, so a missing provider
+// shows up as what it is rather than as a model that silently isn't there.
+export class ModelPicker extends FuzzySuggestModal<ModelChoice> {
+	private showAll: boolean;
+	private buttons: HTMLElement[] = [];
+
 	constructor(
 		app: App,
-		private models: Model[],
+		private all: Model[],
+		private scoped: ScopedModels,
+		private current: Model | null,
+		startWithAll: boolean,
 		private onPick: (model: Model) => void,
+		private onViewChange: (showAll: boolean) => void,
 	) {
 		super(app);
+		this.showAll = startWithAll || !this.hasScope;
 		this.setPlaceholder("Switch model…");
+		if (!this.hasScope) return;
+		const bar = createDiv({ cls: "pi-model-scope" });
+		this.modalEl.prepend(bar);
+		const views: [string, boolean][] = [[`Scoped (${scoped.models.length})`, false], [`All (${all.length})`, true]];
+		this.buttons = views.map(([label, all]) => {
+			const button = bar.createEl("button", { text: label, cls: "pi-pill clickable-icon" });
+			button.addEventListener("click", () => this.setView(all));
+			return button;
+		});
+		this.setInstructions([{ command: "tab", purpose: "scoped / all" }]);
+		this.scope.register([], "Tab", (evt) => {
+			evt.preventDefault();
+			this.setView(!this.showAll);
+		});
+		this.setView(this.showAll);
 	}
-	getItems(): Model[] {
-		return this.models;
+
+	private get hasScope(): boolean {
+		return this.scoped.models.length + this.scoped.unavailable.length > 0;
 	}
-	getItemText(model: Model): string {
-		return `${model.provider}/${model.id}`;
+
+	private setView(showAll: boolean): void {
+		if (showAll !== this.showAll) this.onViewChange(showAll);
+		this.showAll = showAll;
+		this.buttons.forEach((button, i) => button.toggleClass("is-active", (i === 1) === showAll));
+		// Runs the query again against the other list.
+		this.inputEl.dispatchEvent(new Event("input"));
+		this.inputEl.focus();
 	}
-	onChooseItem(model: Model): void {
-		this.onPick(model);
+
+	getItems(): ModelChoice[] {
+		if (this.showAll) return this.all.map((model) => ({ model }));
+		return [...this.scoped.models.map((model) => ({ model })), ...this.scoped.unavailable.map((unavailable) => ({ unavailable }))];
+	}
+
+	getItemText(choice: ModelChoice): string {
+		return choice.model ? `${choice.model.provider}/${choice.model.id}` : choice.unavailable;
+	}
+
+	renderSuggestion(match: FuzzyMatch<ModelChoice>, el: HTMLElement): void {
+		super.renderSuggestion(match, el);
+		const { model, unavailable } = match.item;
+		if (model && this.current && model.provider === this.current.provider && model.id === this.current.id) el.createSpan({ cls: "pi-model-note", text: "current" });
+		if (unavailable) {
+			el.addClass("pi-model-unavailable");
+			el.createSpan({ cls: "pi-model-note", text: "not available" });
+		}
+	}
+
+	onChooseItem(choice: ModelChoice): void {
+		if (choice.model) return this.onPick(choice.model);
+		new Notice(`pi has no model for "${choice.unavailable}" right now. Its provider may come from a package that isn't installed for the panel's pi (Settings → Extensions → Packages), or you aren't logged in to it.`, 10000);
 	}
 }
 

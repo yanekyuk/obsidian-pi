@@ -31,6 +31,8 @@ export interface PiAgentSettings {
 	hiddenTodos: Record<string, string[]>;
 	connectMcpOnStart: boolean;
 	browserControl: boolean;
+	// The model picker's last view: all models, or pi's scoped list (enabledModels).
+	showAllModels: boolean;
 }
 
 export const DEFAULT_SETTINGS: PiAgentSettings = {
@@ -56,6 +58,7 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	hiddenTodos: {},
 	connectMcpOnStart: true,
 	browserControl: false,
+	showAllModels: false,
 };
 
 export class PiAgentSettingTab extends PluginSettingTab {
