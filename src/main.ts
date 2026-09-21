@@ -1,11 +1,12 @@
 import { FileSystemAdapter, Notice, Plugin, addIcon, type Editor } from "obsidian";
 import { existsSync, promises as fs } from "fs";
-import { delimiter, isAbsolute, join, resolve } from "path";
-import { prepareAgentDir, sessionDirFor } from "./agentDir";
+import { homedir } from "os";
+import { basename, delimiter, isAbsolute, join, resolve } from "path";
+import { DEFAULT_INHERITANCE, USER_AGENT_DIR, prepareAgentDir, sessionDirFor } from "./agentDir";
+import { MCP_ADAPTER, Requirements } from "./requirements";
 import { extractBundledFiles } from "./bundled";
 import { resolveEnv } from "./env";
 import { buildSystemPrompt } from "./prompt";
-import { Requirements } from "./requirements";
 import type { PiSpawnOptions } from "./rpc/PiRpcClient";
 import { DEFAULT_SETTINGS, PiAgentSettingTab, type PiAgentSettings } from "./settings";
 import type { ChatSession } from "./view/ChatSession";
@@ -39,7 +40,8 @@ export default class PiAgentPlugin extends Plugin {
 	}
 
 	async onload(): Promise<void> {
-		this.settings = { ...DEFAULT_SETTINGS, ...((await this.loadData()) as Partial<PiAgentSettings> | null) };
+		const saved = (await this.loadData()) as Partial<PiAgentSettings> | null;
+		this.settings = { ...DEFAULT_SETTINGS, ...saved, inherit: { ...DEFAULT_INHERITANCE, ...saved?.inherit } };
 		addIcon("pi", PI_ICON);
 		void resolveEnv(); // warm the shell PATH lookup before the first spawn
 		// Before any chat starts pi, whose PATH includes the launcher.
@@ -142,7 +144,12 @@ export default class PiAgentPlugin extends Plugin {
 		// The Obsidian CLI skill calls `obsidian`. The plugin's launcher goes last on the PATH, so
 		// a command of that name the user already has wins.
 		if (this.manifest.dir) env.PATH = [env.PATH, join(this.vaultPath, this.manifest.dir, "bin")].filter(Boolean).join(delimiter);
-		if (this.settings.isolate) env.PI_CODING_AGENT_DIR = await prepareAgentDir(this.vaultPath);
+		if (this.settings.isolate) {
+			env.PI_CODING_AGENT_DIR = await prepareAgentDir(this.vaultPath, this.settings.inherit);
+			// pi's MCP adapter reads global files outside any pi folder. In this mode it reads one
+			// file only: the one --mcp-config names (the vault's, see buildSpawnOptions).
+			if (!this.settings.inherit.mcpServers) env.PI_MCP_CONFIG_MODE = "exclusive";
+		}
 		return env;
 	}
 
@@ -214,10 +221,15 @@ export default class PiAgentPlugin extends Plugin {
 			// A config folder of its own doesn't stop pi from finding ~/.agents/skills, so skills are
 			// named one by one instead: those of installed packages and the vault's own. The vault's
 			// count only once the user has trusted it, as they would if pi went looking by itself.
-			args.push("--no-skills", "--session-dir", sessionDirFor(vault));
+			args.push("--no-skills");
+			if (s.inherit.sessions) args.push("--session-dir", sessionDirFor(vault));
 			const packages = await this.requirements.installed().catch(() => []);
 			skillDirs.unshift(...packages.map((pkg) => join(pkg.path, "skills")));
 			if (await this.vaultIsTrusted(env)) skillDirs.push(join(vault, ".pi", "skills"), join(vault, ".agents", "skills"));
+			if (s.inherit.skills) skillDirs.push(join(homedir(), ".agents", "skills"), join(USER_AGENT_DIR, "skills"));
+			// The flag belongs to the adapter; pi refuses flags nobody registered.
+			const mcpConfig = join(vault, ".mcp.json");
+			if (!s.inherit.mcpServers && existsSync(mcpConfig) && packages.some((pkg) => basename(pkg.path) === MCP_ADAPTER)) args.push("--mcp-config", mcpConfig);
 		}
 		for (const dir of new Set(skillDirs)) if (existsSync(dir)) args.push("--skill", dir);
 

@@ -57,20 +57,25 @@ These are pi's normal session files for the vault directory, so a conversation s
 
 ## Separate from your terminal pi
 
-The panel's pi has a config folder of its own, `~/.pi/harness`, so what you set up for pi in the terminal stays out of your vault: packages, extensions, skills, subagents, prompt templates and MCP overrides. The plugin installs what the panel needs (below) into that folder. This is what crosses over from `~/.pi/agent`, and nothing else does:
+The panel's pi has a config folder of its own, `~/.pi/harness`, so what you set up for pi in the terminal stays out of your vault unless you want it there. The plugin installs what the panel needs (below) into that folder. What crosses over from `~/.pi/agent` is decided under **Settings → Inheritance**, one switch each:
 
-| | How | Why |
+| Switch | Default | What it does |
 | --- | --- | --- |
-| `auth.json` | linked | Your logins. pi rewrites this file when it refreshes a token, so a link keeps both on the same tokens where a copy would go stale. |
-| `models.json` | linked | Custom models and providers. |
-| `mcp-oauth/` | linked | Logins for MCP servers that use OAuth. |
-| `settings.json` | a few keys copied once | Default provider, model and thinking level, enabled models, compaction, shell prefix. Never the package list. After that the panel's pi keeps its own settings. |
-| `trust.json` | the vault's decision | Whether you trusted this vault (or a folder above it) in pi. |
-| sessions | same folder as before | The history is one list, whichever pi wrote a session. |
+| Logins | on | Links `auth.json`. pi rewrites this file when it refreshes a token, so a link keeps both on the same tokens where a copy would go stale. |
+| Custom models | on | Links `models.json`. |
+| Default model and settings | on | Copies default provider, model and thinking level, enabled models, compaction and shell prefix, once. Never the package list. After that the panel's pi keeps its own settings. |
+| Session history | on | Keeps the vault's sessions in the folder your terminal pi uses, so the history is one list. |
+| Vault trust | on | Carries your decision to trust this vault (or a folder above it) in pi. |
+| MCP logins | on | Links `mcp-oauth/`, the logins of MCP servers that use OAuth. |
+| MCP servers | off | Servers from your global MCP files (`~/.config/mcp/mcp.json`, `~/.agents/mcp.json`, pi's own `mcp.json`). Off, pi's MCP adapter reads the vault's `.mcp.json` and nothing else. |
+| Skills | off | Skills in `~/.agents/skills` and `~/.pi/agent/skills`. pi finds the first of these whatever its config folder is, so the panel names the skills pi may load (installed packages, the vault's `.pi/skills` and `.agents/skills`, the folders in the plugin settings) instead of letting it look. |
+| Local extensions | off | Links `extensions/`. |
+| Subagents | off | Links `agents/`, for an extension that uses them. |
+| Prompt templates | off | Links `prompts/`. |
 
-Skills in `~/.agents/skills` are left out too: the panel names the skills pi may load (those of installed packages, the vault's `.pi/skills` and `.agents/skills`, and the folders in the plugin settings) instead of letting pi look for them. Global MCP files outside `~/.pi` (`~/.config/mcp/mcp.json`, `~/.agents/mcp.json`) are the one thing pi's MCP adapter still reads.
+Switching something off removes the link the plugin made and never touches your own files. Packages you installed with `pi install` are not inherited one by one.
 
-**What the vault has in its own `.pi` folder still loads**, once you have trusted the vault in pi. That is the place for anything you want in the panel but the plugin doesn't install, such as a login provider. From the vault folder:
+**What the vault has in its own `.pi` folder is not inheritance and still loads**, once you have trusted the vault in pi. That is the place for anything you want in the panel but the plugin doesn't install, such as a login provider. From the vault folder:
 
 ```bash
 pi install -l npm:pi-claude-oauth-adapter
@@ -78,7 +83,7 @@ pi install -l npm:pi-claude-oauth-adapter
 
 Logins that depend on a provider package (the credentials are in `auth.json`, but the provider comes from a package) only show up in the panel once that package is installed this way.
 
-Turn the separation off under Settings → Extensions to have the panel's pi use `~/.pi/agent` like the terminal does.
+Turn **Keep the panel's pi separate** off to have the panel use `~/.pi/agent` as it is, like the terminal does.
 
 ## pi extensions the panel is built around
 

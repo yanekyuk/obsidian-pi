@@ -140,7 +140,7 @@ const check = (ok, label, detail = "") => {
 	mkdirSync(harness);
 	writeFileSync(join(harness, "auth.json"), "{}");
 
-	await prepareAgentDir(vault, user, harness);
+	await prepareAgentDir(vault, undefined, user, harness);
 	const json = (p) => JSON.parse(readFileSync(p, "utf8"));
 	check(lstatSync(join(harness, "auth.json")).isSymbolicLink() && readlinkSync(join(harness, "auth.json")) === join(user, "auth.json"), "credentials are linked, so a refreshed token is shared");
 	check(lstatSync(join(harness, "mcp-oauth")).isSymbolicLink() && !existsSync(join(harness, "models.json")), "MCP logins are linked; what the user doesn't have isn't invented");
@@ -150,15 +150,29 @@ const check = (ok, label, detail = "") => {
 	check(Object.keys(json(join(harness, "trust.json"))).length === 1 && json(join(harness, "trust.json"))[vault] === false, "trust: the nearest decision above the vault is carried, and only for the vault");
 
 	writeFileSync(join(harness, "settings.json"), JSON.stringify({ ...seeded, defaultModel: "chosen-in-panel", packages: ["npm:@juicesharp/rpiv-todo"] }));
-	await prepareAgentDir(vault, user, harness);
+	await prepareAgentDir(vault, undefined, user, harness);
 	const again = json(join(harness, "settings.json"));
 	check(again.defaultModel === "chosen-in-panel" && again.packages.length === 1, "a second start changes nothing the panel's pi has set for itself");
 
 	const own = join(work, "harness-own-login");
 	mkdirSync(own);
 	writeFileSync(join(own, "auth.json"), '{"openai":"logged in here"}');
-	await prepareAgentDir(vault, user, own);
+	await prepareAgentDir(vault, undefined, user, own);
 	check(!lstatSync(join(own, "auth.json")).isSymbolicLink(), "credentials that exist only in the panel's folder are not overwritten");
+	// Settings → Inheritance: each switch adds or takes away exactly its own thing.
+	const all = { logins: true, models: true, mcpLogins: true, settings: true, trust: true, sessions: true, skills: true, mcpServers: true, extensions: true, agents: true, prompts: true };
+	await prepareAgentDir(vault, all, user, harness);
+	check(lstatSync(join(harness, "extensions")).isSymbolicLink() && !existsSync(join(harness, "agents")), "inheritance on: local extensions are linked; a folder the user doesn't have is skipped");
+	await prepareAgentDir(vault, { ...all, logins: false, extensions: false, trust: false }, user, harness);
+	check(!existsSync(join(harness, "auth.json")) && !existsSync(join(harness, "extensions")) && lstatSync(join(harness, "mcp-oauth")).isSymbolicLink(), "inheritance off: that link goes away, the others stay");
+	check(!(vault in json(join(harness, "trust.json"))), "inheritance off: the carried trust decision is withdrawn");
+	check(existsSync(join(user, "auth.json")) && existsSync(join(user, "extensions")), "switching off never touches the user's own files");
+	await prepareAgentDir(vault, { ...all, logins: false }, user, own);
+	check(readFileSync(join(own, "auth.json"), "utf8").includes("logged in here"), "switching logins off leaves a login made in the panel's folder alone");
+	const bare = join(work, "harness-bare");
+	await prepareAgentDir(vault, { ...all, settings: false }, user, bare);
+	check(!existsSync(join(bare, "settings.json")), "settings inheritance off: nothing is copied");
+
 	check(sessionDirFor("/Users/me/My Vault", "/u/.pi/agent") === "/u/.pi/agent/sessions/--Users-me-My Vault--", "sessions stay in the folder pi itself would use for the vault");
 }
 
@@ -324,7 +338,7 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 // machine's real one. It must be able to log in, and must not see what the user has for the terminal.
 {
 	const isolatedDir = join(work, "isolated-agent");
-	await prepareAgentDir(work, undefined, isolatedDir);
+	await prepareAgentDir(work, undefined, undefined, isolatedDir);
 	const isolated = new PiRpcClient();
 	await isolated.start({ binary: "pi", args: ["--no-session", "--no-skills"], cwd: work, env: { ...env, PI_CODING_AGENT_DIR: isolatedDir } });
 	const theirs = await isolated.getCommands();

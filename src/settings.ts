@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type PiAgentPlugin from "./main";
 import { basename } from "path";
+import { DEFAULT_INHERITANCE, type Inheritance } from "./agentDir";
 import { REQUIRED_PACKAGES, SKILLS_PACKAGE, findRequired } from "./requirements";
 
 export interface PiAgentSettings {
@@ -15,6 +16,7 @@ export interface PiAgentSettings {
 	extraArgs: string;
 	lastSessionFile: string;
 	isolate: boolean;
+	inherit: Inheritance;
 	manageExtensions: boolean;
 	autoUpdate: boolean;
 	// The user has answered the offer to install missing extensions, either way.
@@ -36,6 +38,7 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	extraArgs: "",
 	lastSessionFile: "",
 	isolate: true,
+	inherit: DEFAULT_INHERITANCE,
 	// Both download and run code from npm, so both wait for the user to say yes.
 	manageExtensions: false,
 	autoUpdate: false,
@@ -101,17 +104,47 @@ export class PiAgentSettingTab extends PluginSettingTab {
 				}),
 			);
 
-		new Setting(containerEl).setName("Extensions").setHeading();
+		new Setting(containerEl).setName("Inheritance").setHeading();
 
 		new Setting(containerEl)
 			.setName("Keep the panel's pi separate from your terminal pi")
-			.setDesc("The panel's pi uses its own config folder (~/.pi/harness), so the packages, extensions, skills, subagents and MCP setup you have for pi in the terminal stay out of your vault. Your logins, custom models and session history are shared; default model and similar settings are copied over once. What this vault has in its own .pi folder still loads, if you have trusted the vault in pi. Reload pi after changing this.")
+			.setDesc("The panel's pi uses a config folder of its own (~/.pi/harness) and takes from your terminal pi (~/.pi/agent) only what is switched on below. What this vault has in its own .pi folder is not inheritance and loads either way, once you have trusted the vault in pi. Off: the panel uses ~/.pi/agent as it is, with everything in it. Reload pi after changing anything here.")
 			.addToggle((t) =>
 				t.setValue(s.isolate).onChange(async (v) => {
 					s.isolate = v;
 					await save();
+					this.display();
 				}),
 			);
+
+		const inherited: [keyof Inheritance, string, string][] = [
+			["logins", "Logins", "Your provider credentials (auth.json), linked so a refreshed token is shared. A login that depends on a provider package also needs that package, for example installed in the vault's .pi folder."],
+			["models", "Custom models", "Models and providers you defined in models.json."],
+			["settings", "Default model and settings", "Default provider, model and thinking level, enabled models, compaction and shell prefix, copied once. Never the package list."],
+			["sessions", "Session history", "Keep this vault's sessions where your terminal pi keeps them, so the history is one list."],
+			["trust", "Vault trust", "Your decision in pi to trust this vault, which is what lets the vault's own .pi folder load."],
+			["mcpLogins", "MCP logins", "OAuth logins for MCP servers."],
+			["mcpServers", "MCP servers", "Servers from your global MCP files (~/.config/mcp/mcp.json, ~/.agents/mcp.json and pi's own). Off: only the vault's .mcp.json counts."],
+			["skills", "Skills", "Skills in ~/.agents/skills and ~/.pi/agent/skills."],
+			["extensions", "Local extensions", "Extensions in ~/.pi/agent/extensions. Packages you installed with pi install are not inherited one by one: install the ones you want in the vault's .pi folder (pi install -l), or switch the separation off."],
+			["agents", "Subagents", "Subagent definitions in ~/.pi/agent/agents, for an extension that uses them."],
+			["prompts", "Prompt templates", "Templates in ~/.pi/agent/prompts."],
+		];
+		if (s.isolate) {
+			for (const [key, name, desc] of inherited) {
+				new Setting(containerEl)
+					.setName(name)
+					.setDesc(desc)
+					.addToggle((t) =>
+						t.setValue(s.inherit[key]).onChange(async (v) => {
+							s.inherit = { ...s.inherit, [key]: v };
+							await save();
+						}),
+					);
+			}
+		}
+
+		new Setting(containerEl).setName("Extensions").setHeading();
 
 		new Setting(containerEl)
 			.setName("Install missing pi extensions")
