@@ -4,11 +4,10 @@ import { basename, join } from "path";
 
 // The pi extensions the panel is built around. The plugin installs the missing ones through
 // pi's own package manager, into whichever config folder the panel's pi uses (see agentDir.ts).
-export const REQUIRED_PACKAGES = ["rpiv-advisor", "rpiv-args", "rpiv-ask-user-question", "rpiv-btw", "rpiv-todo", "rpiv-web-tools"] as const;
-const SCOPE = "@juicesharp";
-
-// Needed only by vaults that list MCP servers in .mcp.json: it is what makes pi read that file.
+// The MCP adapter is what makes pi read a vault's .mcp.json and gives it the /mcp command.
 export const MCP_ADAPTER = "pi-mcp-adapter";
+export const REQUIRED_PACKAGES = ["rpiv-advisor", "rpiv-args", "rpiv-ask-user-question", "rpiv-btw", "rpiv-todo", "rpiv-web-tools", MCP_ADAPTER] as const;
+const SCOPE = "@juicesharp";
 const sourceOf = (name: string) => (name === MCP_ADAPTER ? `npm:${name}` : `npm:${SCOPE}/${name}`);
 
 // Steph Ango's Obsidian skills. They are his, so the plugin doesn't carry a copy: pi fetches
@@ -43,8 +42,8 @@ export function parsePiList(output: string): InstalledPackage[] {
 // By folder name, not by source: a package installed from a local checkout or a git
 // fork satisfies the requirement just as well, and installing the npm one on top of it
 // would load the extension twice.
-export function findRequired(installed: InstalledPackage[], extra: string[] = []): Map<string, InstalledPackage | null> {
-	return new Map([...REQUIRED_PACKAGES, ...extra].map((name) => [name, installed.find((p) => basename(p.path) === name) ?? null]));
+export function findRequired(installed: InstalledPackage[]): Map<string, InstalledPackage | null> {
+	return new Map(REQUIRED_PACKAGES.map((name) => [name, installed.find((p) => basename(p.path) === name) ?? null]));
 }
 
 // What tells one state of an installed package from the next: its npm version, or for a git
@@ -74,8 +73,6 @@ export function versionAt(path: string): string | null {
 export interface RequirementsHost {
 	piCommand(): Promise<{ binary: string; env: NodeJS.ProcessEnv; cwd: string }>;
 	enabled(): boolean;
-	// The vault has a .mcp.json, so pi needs the adapter that reads it.
-	wantsMcp(): boolean;
 	autoUpdate(): boolean;
 	// pi is in the middle of something in one of the tabs.
 	busy(): boolean;
@@ -110,7 +107,7 @@ export class Requirements {
 	}
 
 	async status(): Promise<Map<string, InstalledPackage | null>> {
-		return findRequired(await this.installed(), this.host.wantsMcp() ? [MCP_ADAPTER] : []);
+		return findRequired(await this.installed());
 	}
 
 	// Installs whatever is missing. Runs once per Obsidian session however many chat tabs

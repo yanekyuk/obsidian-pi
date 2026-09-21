@@ -22,6 +22,7 @@ export class ChatView extends ItemView {
 	private active: ChatSession | null = null;
 	private saved: { tabs: SavedTab[]; active: number } | null = null;
 	private ready = false;
+	private adopted: SavedTab[] = [];
 	private sessionHost: SessionHost;
 
 	private tabsEl!: HTMLElement;
@@ -87,10 +88,10 @@ export class ChatView extends ItemView {
 
 	// Takes on tabs from somewhere else (a panel left over from before the plugin was renamed).
 	// A session that is already open in some tab is not opened twice.
+	// Before the panel has opened its own tabs they wait here, where the state Obsidian is about to apply can't overwrite them.
 	adoptTabs(tabs: SavedTab[]): void {
-		const wanted = tabs.filter((tab) => existsSync(tab.sessionFile) && !this.plugin.holderOf(tab.sessionFile));
-		if (this.ready) for (const tab of wanted) this.addTab(tab, false);
-		else this.saved = { tabs: [...(this.saved?.tabs ?? []), ...wanted.filter((tab) => !this.saved?.tabs.some((t) => t.sessionFile === tab.sessionFile))], active: this.saved?.active ?? 0 };
+		if (!this.ready) return void this.adopted.push(...tabs);
+		for (const tab of tabs) if (existsSync(tab.sessionFile) && !this.plugin.holderOf(tab.sessionFile)) this.addTab(tab, false);
 		this.app.workspace.requestSaveLayout();
 	}
 
@@ -238,7 +239,8 @@ export class ChatView extends ItemView {
 		if (this.ready) return;
 		this.ready = true;
 		const { resumeLastSession, lastSessionFile } = this.plugin.settings;
-		const wanted = !resumeLastSession ? [] : this.saved ? this.saved.tabs : lastSessionFile ? [{ sessionFile: lastSessionFile, title: "" }] : [];
+		const own = !resumeLastSession ? [] : this.saved ? this.saved.tabs : lastSessionFile ? [{ sessionFile: lastSessionFile, title: "" }] : [];
+		const wanted = [...own, ...this.adopted.splice(0), ...this.plugin.takePendingTabs()];
 		// Each session file gets one pi, whichever panel asks first.
 		for (const tab of wanted) if (existsSync(tab.sessionFile) && !this.plugin.holderOf(tab.sessionFile)) this.addTab(tab, false);
 		const lastActive = this.saved?.tabs[this.saved.active]?.sessionFile;

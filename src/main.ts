@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Notice, Plugin, addIcon, type Editor, type WorkspaceLeaf } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, addIcon, type Editor } from "obsidian";
 import { existsSync, promises as fs } from "fs";
 import { homedir } from "os";
 import { basename, delimiter, isAbsolute, join, resolve } from "path";
@@ -13,7 +13,7 @@ import type { PiSpawnOptions } from "./rpc/PiRpcClient";
 import { DEFAULT_SETTINGS, PiAgentSettingTab, type PiAgentSettings } from "./settings";
 import type { ChatSession } from "./view/ChatSession";
 import { ChatView, VIEW_TYPE_PI } from "./view/ChatView";
-import { savedTabsFrom } from "./view/savedTabs";
+import { panelsIn, type SavedTab } from "./view/savedTabs";
 
 const MAX_SESSIONS_WITH_HIDDEN_TODOS = 30;
 const LEGACY_VIEW_TYPE = "pi-agent-chat";
@@ -27,7 +27,6 @@ export default class PiAgentPlugin extends Plugin {
 	requirements = new Requirements({
 		piCommand: () => this.piCommand(),
 		enabled: () => this.settings.manageExtensions,
-		wantsMcp: () => existsSync(join(this.vaultPath, ".mcp.json")),
 		autoUpdate: () => this.settings.autoUpdate,
 		busy: () => this.chatViews().some((view) => view.isBusy),
 		lastUpdate: () => this.settings.lastExtensionUpdate,
@@ -161,26 +160,39 @@ export default class PiAgentPlugin extends Plugin {
 
 	// Before it was published the plugin was called Pi Agent, and its panels are still in the
 	// workspace layout under that name's view type, as dead panes holding their open tabs. Their
-	// tabs move to a live panel and the dead pane is closed. Another plugin now owns that name, so
-	// a pane is only touched when that plugin isn't running and the state in it is plainly ours.
+	// tabs move to a live panel and the dead pane is closed.
+	//
+	// The layout file is read from disk: what a pane whose plugin is gone reports about itself at
+	// run time is Obsidian's business and has proved unreliable, while the file says plainly what
+	// was saved. Another plugin now owns the old name, so a pane is only touched while that plugin
+	// isn't running and the state in it is plainly ours. Each pane is adopted once, so a tab the
+	// user closes afterwards stays closed even if the dead pane could not be removed.
 	private async adoptLegacyPanels(): Promise<void> {
-		const { workspace } = this.app;
 		if (this.isPluginRunning("pi-agent")) return;
-		const legacy: WorkspaceLeaf[] = [];
-		workspace.iterateAllLeaves((leaf) => {
-			if (leaf.getViewState().type === LEGACY_VIEW_TYPE) legacy.push(leaf);
-		});
-		for (const leaf of legacy) {
-			const saved = savedTabsFrom(leaf.getViewState().state);
-			if (!saved?.tabs.length || !saved.tabs.every((tab) => tab.sessionFile.endsWith(".jsonl"))) continue;
-			const live = this.chatViews()[0];
-			if (live) {
-				live.adoptTabs(saved.tabs);
-				leaf.detach();
-			} else {
-				await leaf.setViewState({ type: VIEW_TYPE_PI, state: { tabs: saved.tabs, active: saved.active } });
+		try {
+			const layout: unknown = JSON.parse(await this.app.vault.adapter.read(`${this.app.vault.configDir}/workspace.json`));
+			const found = panelsIn(layout, LEGACY_VIEW_TYPE);
+
+			for (const { id, tabs } of found) {
+				if (!this.settings.adoptedLegacyPanels.includes(id)) {
+					this.settings.adoptedLegacyPanels = [...this.settings.adoptedLegacyPanels, id];
+					await this.saveSettings();
+					const live = this.chatViews()[0];
+					if (live) live.adoptTabs(tabs);
+					else this.pendingTabs.push(...tabs); // for the first panel that opens
+					console.debug(`[pi-harness] adopted ${tabs.length} tabs from the old panel ${id}${live ? "" : " (waiting for a panel)"}`);
+				}
+				this.app.workspace.getLeafById(id)?.detach();
 			}
+		} catch (err) {
+			console.warn("[pi-harness] couldn't look for panels from before the rename", err);
 		}
+	}
+
+	private pendingTabs: SavedTab[] = [];
+
+	takePendingTabs(): SavedTab[] {
+		return this.pendingTabs.splice(0);
 	}
 
 	// The settings files pi reads its package lists from: the panel's pi, and the vault's own .pi folder.

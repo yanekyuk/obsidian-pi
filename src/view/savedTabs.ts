@@ -15,3 +15,21 @@ export function savedTabsFrom(state: unknown): { tabs: SavedTab[]; active: numbe
 	if (typeof saved?.sessionFile === "string") return { tabs: [{ sessionFile: saved.sessionFile, title: "" }], active: 0 };
 	return saved?.fresh === true ? { tabs: [], active: 0 } : null;
 }
+
+// Panes of a given view type in a saved workspace layout (workspace.json), wherever they sit in
+// its tree, with the tabs they hold. Only panes whose state is plainly a list of session files.
+export function panelsIn(layout: unknown, viewType: string): { id: string; tabs: SavedTab[] }[] {
+	const found: { id: string; tabs: SavedTab[] }[] = [];
+	const walk = (node: unknown): void => {
+		if (Array.isArray(node)) return node.forEach(walk);
+		if (!node || typeof node !== "object") return;
+		const leaf = node as { id?: unknown; type?: unknown; state?: { type?: unknown; state?: unknown } };
+		if (leaf.type === "leaf" && leaf.state?.type === viewType && typeof leaf.id === "string") {
+			const tabs = savedTabsFrom(leaf.state.state)?.tabs ?? [];
+			if (tabs.length && tabs.every((tab) => tab.sessionFile.endsWith(".jsonl"))) found.push({ id: leaf.id, tabs });
+		}
+		Object.values(node).forEach(walk);
+	};
+	walk(layout);
+	return found;
+}

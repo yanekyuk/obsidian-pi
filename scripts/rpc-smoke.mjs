@@ -33,7 +33,7 @@ export { summarize } from ${JSON.stringify(join(root, "src/view/TabSwitcher.ts")
 export { extractBundledFiles } from ${JSON.stringify(join(root, "src/bundled.ts"))};
 export { prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/agentDir.ts"))};
 export { disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } from ${JSON.stringify(join(root, "src/packages.ts"))};
-export { savedTabsFrom } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};`,
+export { savedTabsFrom, panelsIn } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};`,
 );
 // sessions.ts reaches prompt.ts, which imports the Obsidian API; outside the app a stub will do.
 const obsidianStub = {
@@ -47,7 +47,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, savedTabsFrom, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } =
+const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -234,6 +234,13 @@ const check = (ok, label, detail = "") => {
 	const saved = savedTabsFrom({ tabs: [{ sessionFile: "/s/a.jsonl", title: "A" }, { title: "no file" }, { sessionFile: "/s/b.jsonl" }], active: 1 });
 	check(saved?.tabs.length === 2 && saved.tabs[1].title === "" && saved.active === 1, "saved tabs: entries without a file are dropped");
 	check(savedTabsFrom({ sessionFile: "/s/old.jsonl" })?.tabs[0].sessionFile === "/s/old.jsonl", "saved tabs: a single-session layout from before tabs still opens");
+	const layout = { main: { type: "split", children: [{ type: "leaf", id: "m1", state: { type: "markdown", state: { file: "a.md" } } }] }, right: { type: "split", children: [{ type: "tabs", children: [
+		{ type: "leaf", id: "old1", state: { type: "pi-agent-chat", state: { tabs: [{ sessionFile: "/s/a.jsonl", title: "A" }, { sessionFile: "/s/b.jsonl", title: "B" }], active: 1 }, icon: "pi" } },
+		{ type: "leaf", id: "new1", state: { type: "pi-harness-chat", state: { tabs: [{ sessionFile: "/s/b.jsonl", title: "B" }] } } },
+		{ type: "leaf", id: "theirs", state: { type: "pi-agent-chat", state: { conversation: "someone else's plugin" } } },
+	] }] } };
+	const old = panelsIn(layout, "pi-agent-chat");
+	check(old.length === 1 && old[0].id === "old1" && old[0].tabs.map((t) => t.title).join() === "A,B", "old panels are found in a saved layout by view type; a pane whose state isn't ours is left out");
 	check(savedTabsFrom({ fresh: true })?.tabs.length === 0 && savedTabsFrom({}) === null && savedTabsFrom(null) === null, "saved tabs: fresh panel vs. no saved state");
 }
 
@@ -353,7 +360,7 @@ check(env.PATH.split(":").length > (process.env.PATH ?? "").split(":").length ||
 	const { execFileSync } = await import("child_process");
 	const real = findRequired(parsePiList(execFileSync("pi", ["list"], { env, encoding: "utf8" })));
 	const missing = REQUIRED_PACKAGES.filter((name) => !real.get(name));
-	check(missing.length === 0, "all six required extensions are found in this machine's `pi list`", missing.length ? `missing: ${missing.join(", ")}` : [...real.values()].map((p) => p.source.replace("npm:@juicesharp/", "")).join(", "));
+	check(missing.length === 0, "all required extensions are found in this machine's `pi list`", missing.length ? `missing: ${missing.join(", ")}` : [...real.values()].map((p) => p.source.replace("npm:@juicesharp/", "")).join(", "));
 }
 
 const client = new PiRpcClient();

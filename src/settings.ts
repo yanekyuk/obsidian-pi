@@ -4,7 +4,7 @@ import { basename } from "path";
 import { DEFAULT_INHERITANCE, type Inheritance } from "./agentDir";
 import { disabled, enabled, isDisabled, readPackageEntries, replacePackageEntry, sourceOf, type PackageEntry } from "./packages";
 import { confirmAction } from "./view/modals";
-import { MCP_ADAPTER, REQUIRED_PACKAGES, SKILLS_PACKAGE } from "./requirements";
+import { REQUIRED_PACKAGES, SKILLS_PACKAGE } from "./requirements";
 
 export interface PiAgentSettings {
 	piPath: string;
@@ -26,6 +26,8 @@ export interface PiAgentSettings {
 	lastExtensionUpdate: number;
 	// Package entries as they were before being switched off here, so their own filters come back. Keyed by settings file and source.
 	rememberedPackages: Record<string, PackageEntry>;
+	// Ids of panes from before the rename whose tabs have been taken over (see main.ts).
+	adoptedLegacyPanels: string[];
 	hiddenTodos: Record<string, string[]>;
 	connectMcpOnStart: boolean;
 	browserControl: boolean;
@@ -50,6 +52,7 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	extensionsOfferAnswered: false,
 	lastExtensionUpdate: 0,
 	rememberedPackages: {},
+	adoptedLegacyPanels: [],
 	hiddenTodos: {},
 	connectMcpOnStart: true,
 	browserControl: false,
@@ -265,7 +268,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 		if (installed instanceof Error) return void header.setDesc(`Couldn't run pi list: ${installed.message}`);
 		header.setDesc("What the panel's pi loads. Switching a package off keeps it installed but loads nothing from it. Reload pi (the panel's ↻ button) to apply a change.");
 
-		const required = new Set<string>([...REQUIRED_PACKAGES, MCP_ADAPTER, SKILLS_PACKAGE.name]);
+		const required = new Set<string>([...REQUIRED_PACKAGES, SKILLS_PACKAGE.name]);
 		const scopes = [
 			{ file: plugin.panelSettingsFile, local: false, label: s.isolate ? "the panel's pi" : "your pi, shared with the terminal", editable: s.isolate },
 			{ file: plugin.vaultSettingsFile, local: true, label: "this vault's .pi folder", editable: true },
