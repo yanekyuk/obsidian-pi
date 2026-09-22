@@ -68,6 +68,9 @@ export class ComposerSuggest {
 		if (command) return { start: 0, query: command[1], kind: "command" };
 		const note = before.match(/(?:^|\s)@([^\s@]*)$/);
 		if (note) return { start: before.length - note[1].length - 1, query: note[1], kind: "note" };
+		// Obsidian's own habit: the wikilink is completed, brackets included.
+		const link = before.match(/\[\[([^\][]*)$/);
+		if (link) return { start: before.length - link[1].length - 2, query: link[1], kind: "note" };
 		return null;
 	}
 

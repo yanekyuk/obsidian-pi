@@ -20,6 +20,7 @@ import { renderInline } from "./markdown";
 import { ModelPicker, pickOne, promptText } from "./modals";
 import { SideQuestions } from "./SideQuestion";
 import { TodoPanel, tasksFrom } from "./TodoPanel";
+import { appendToNote, createNoteFrom, insertIntoNote, markdownOf } from "./writeBack";
 
 const STICK_TO_BOTTOM_PX = 48;
 const MCP_RECHECK_MS = 30_000;
@@ -305,7 +306,7 @@ export class ChatSession {
 		});
 
 		this.attachments = new AttachmentTray(composer, () => this.renderComposerMode());
-		this.inputEl = composer.createEl("textarea", { cls: "pi-input", attr: { rows: "1", placeholder: "Ask pi…  / for commands, @ for notes" } });
+		this.inputEl = composer.createEl("textarea", { cls: "pi-input", attr: { rows: "1", placeholder: "Ask pi…  / for commands, [[ or @ for notes" } });
 		this.suggest = new ComposerSuggest(this.app, this.inputEl, composer);
 		this.inputEl.addEventListener("input", () => this.autoGrow());
 		this.inputEl.addEventListener("keydown", (evt) => this.onInputKey(evt));
@@ -316,13 +317,19 @@ export class ChatSession {
 			void this.attach(files);
 		});
 		composer.addEventListener("dragover", (evt) => {
-			if (!evt.dataTransfer?.types.includes("Files")) return;
+			if (!evt.dataTransfer?.types.includes("Files") && !this.draggedVaultFiles().length) return;
 			evt.preventDefault();
 			composer.addClass("is-drop-target");
 		});
 		composer.addEventListener("dragleave", () => composer.removeClass("is-drop-target"));
 		composer.addEventListener("drop", (evt) => {
 			composer.removeClass("is-drop-target");
+			const notes = this.draggedVaultFiles();
+			if (notes.length) {
+				evt.preventDefault();
+				this.insertInline(notes.map((file) => `[[${file.path.replace(/\.md$/, "")}]]`).join(" ") + " ");
+				return;
+			}
 			const files = imageFilesOf(evt.dataTransfer);
 			if (!files.length) return;
 			evt.preventDefault();
@@ -932,6 +939,27 @@ export class ChatSession {
 		this.focusComposer();
 	}
 
+	// Into the draft at the cursor, with a space before it when it lands mid-word.
+	private insertInline(text: string): void {
+		const { value, selectionStart, selectionEnd } = this.inputEl;
+		const head = value.slice(0, selectionStart);
+		const spaced = head && !/\s$/.test(head) ? ` ${text}` : text;
+		this.inputEl.value = head + spaced + value.slice(selectionEnd);
+		const caret = head.length + spaced.length;
+		this.inputEl.setSelectionRange(caret, caret);
+		this.autoGrow();
+		this.focusComposer();
+	}
+
+	// Obsidian's own drags (file explorer, search results) don't carry files in dataTransfer;
+	// the drag manager knows what is being dragged.
+	private draggedVaultFiles(): TFile[] {
+		const draggable = (this.app as App & { dragManager?: { draggable: { type?: string; file?: unknown; files?: unknown[] } | null } }).dragManager?.draggable;
+		if (!draggable) return [];
+		const items = draggable.type === "files" ? (draggable.files ?? []) : draggable.type === "file" ? [draggable.file] : [];
+		return items.filter((item): item is TFile => item instanceof TFile);
+	}
+
 	// ---------------------------------------------------------------- events
 
 	private handleEvent(e: RpcEvent): void {
@@ -1214,8 +1242,28 @@ export class ChatSession {
 		} else if (message.stopReason === "aborted") {
 			live.el.createDiv({ cls: "pi-msg-notice", text: "Stopped" });
 		}
+		live.el.querySelector(".pi-msg-actions")?.remove();
+		const text = markdownOf(message.content);
+		if (text) this.renderMessageActions(live.el, text);
 		if (!live.el.childElementCount) live.el.remove();
 		this.keepScrolled();
+	}
+
+	// Ways to get a reply out of the panel and into the vault. Shown on hover, after the text.
+	private renderMessageActions(el: HTMLElement, text: string): void {
+		const bar = el.createDiv({ cls: "pi-msg-actions" });
+		const action = (icon: string, label: string, run: () => unknown) => {
+			const button = bar.createEl("button", { cls: "clickable-icon", attr: { "aria-label": label } });
+			setIcon(button, icon);
+			button.addEventListener("click", () => void run());
+		};
+		action("copy", "Copy as Markdown", async () => {
+			await navigator.clipboard.writeText(text);
+			new Notice("Copied.");
+		});
+		action("text-cursor-input", "Insert into the open note at the cursor (replaces the selection)", () => insertIntoNote(this.app, text));
+		action("list-end", "Append to the open note", () => appendToNote(this.app, text));
+		action("file-plus", "New note from this reply", () => createNoteFrom(this.app, text));
 	}
 
 	private cardFor(id: string, name: string, args?: Record<string, unknown>, parent?: HTMLElement): ToolCard {

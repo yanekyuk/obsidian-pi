@@ -90,6 +90,30 @@
 	color: var(--text-faint);
 }
 
+/* Reply actions: a quiet row that only shows itself while the pointer is on the message. */
+.pi-msg-actions {
+	display: flex;
+	gap: var(--size-2-1);
+	margin-top: calc(-1 * var(--size-2-2));
+	opacity: 0;
+	transition: opacity 120ms ease;
+}
+.pi-msg-assistant:hover .pi-msg-actions,
+.pi-msg-actions:focus-within {
+	opacity: 1;
+}
+.pi-msg-actions .clickable-icon {
+	padding: var(--size-2-1) var(--size-2-2);
+	color: var(--text-faint);
+}
+.pi-msg-actions .clickable-icon:hover {
+	color: var(--text-muted);
+}
+.pi-msg-actions .svg-icon {
+	width: var(--icon-s);
+	height: var(--icon-s);
+}
+
 .pi-msg-notice {
 	align-self: center;
 	font-size: var(--font-ui-smaller);

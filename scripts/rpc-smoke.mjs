@@ -34,7 +34,8 @@ export { extractBundledFiles } from ${JSON.stringify(join(root, "src/bundled.ts"
 export { prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/agentDir.ts"))};
 export { disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } from ${JSON.stringify(join(root, "src/packages.ts"))};
 export { scopeModels } from ${JSON.stringify(join(root, "src/models.ts"))};
-export { savedTabsFrom, panelsIn } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};`,
+export { savedTabsFrom, panelsIn } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};
+export { splitTitle, markdownOf } from ${JSON.stringify(join(root, "src/view/writeBack.ts"))};`,
 );
 // sessions.ts reaches prompt.ts, which imports the Obsidian API; outside the app a stub will do.
 const obsidianStub = {
@@ -42,13 +43,13 @@ const obsidianStub = {
 	setup(build) {
 		build.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "stub" }));
 		build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
-			contents: "export class MarkdownView {}\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};",
+			contents: "export class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');",
 		}));
 	},
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } =
+const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -233,6 +234,18 @@ const check = (ok, label, detail = "") => {
 	check(ids(scopeModels(["*sonnet*", "OPENAI-CODEX/*"], available)) === "claude-sonnet-5,claude-sonnet-5-20260301,gpt-5.6-sol,gpt-5.6-luna", "scoped models: globs match the id or provider/id, case-insensitively");
 	check(ids(scopeModels(["sonnet", "sonnet"], available)) === "claude-sonnet-5", "scoped models: a partial name stands for one model, and nothing is listed twice");
 	check(scopeModels([], available).models.length === 0 && scopeModels(["a.b"], [m("x", "aXb")]).models.length === 0, "scoped models: no patterns, no scope; a dot is a dot");
+}
+
+// ---- write-back: a reply becoming a note
+{
+	const md = markdownOf([{ type: "thinking", thinking: "hm" }, { type: "text", text: "First.\n" }, { type: "toolCall", id: "1" }, { type: "text", text: "  Second." }, { type: "text", text: "" }]);
+	check(md === "First.\n\nSecond.", "markdownOf: text blocks only, trimmed, joined by a blank line", JSON.stringify(md));
+	const headed = splitTitle("# A *plan*: part 1/2\n\nBody here\n");
+	check(headed.title === "A plan part 1-2" && headed.body === "Body here\n", "splitTitle: a top heading names the file (unsafe characters replaced) and leaves the body", JSON.stringify(headed));
+	const plain = splitTitle("\n**Just** a line with [[Link]] and more.\nSecond line");
+	check(plain.title === "Just a line with Link and more" && plain.body === "**Just** a line with [[Link]] and more.\nSecond line\n", "splitTitle: otherwise the first line names it, trailing dot dropped, text kept as written", JSON.stringify(plain));
+	check(splitTitle("   ").title === "pi reply" && splitTitle("   ").body === "", "splitTitle: nothing to go on falls back to a fixed name");
+	check(splitTitle("# " + "x".repeat(100)).title.length === 60, "splitTitle: names are cut to 60 characters");
 }
 
 // ---- tabs: what the title shows for the tabs out of sight, and what the layout brings back
