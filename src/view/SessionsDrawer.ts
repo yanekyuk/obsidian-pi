@@ -7,7 +7,6 @@ export interface SessionsHost {
 	// Session files held by other chat panels; two pi processes must never share one.
 	sessionsOpenElsewhere(): Set<string>;
 	openSession(session: SessionSummary): void;
-	openSessionInNewTab(session: SessionSummary): void;
 	renameSession(session: SessionSummary): void;
 	duplicateSession(session: SessionSummary): void;
 	deleteSession(session: SessionSummary): void;
@@ -165,7 +164,6 @@ export class SessionsDrawer {
 	private showMenu(session: SessionSummary, evt: MouseEvent): void {
 		const menu = new Menu();
 		menu.addItem((i) => i.setTitle("Open").setIcon("message-square").onClick(() => this.host.openSession(session)));
-		menu.addItem((i) => i.setTitle("Open in new tab").setIcon("lucide-file-plus").onClick(() => this.host.openSessionInNewTab(session)));
 		menu.addSeparator();
 		menu.addItem((i) => i.setTitle("Rename…").setIcon("pencil").onClick(() => this.host.renameSession(session)));
 		menu.addItem((i) => i.setTitle("Duplicate").setIcon("copy").onClick(() => this.host.duplicateSession(session)));

@@ -204,7 +204,6 @@ export class ChatView extends ItemView {
 			currentSessionFile: () => this.active?.heldSessionFile ?? null,
 			sessionsOpenElsewhere: () => new Set(this.plugin.heldSessionFiles(this.active)),
 			openSession: (session) => void this.openSession(session.path),
-			openSessionInNewTab: (session) => void this.openSession(session.path, true),
 			renameSession: (session) => void this.renameSession(session),
 			duplicateSession: (session) => void this.duplicateSession(session),
 			deleteSession: (session) => void this.deleteSession(session),
@@ -318,19 +317,16 @@ export class ChatView extends ItemView {
 
 	// ---------------------------------------------------------------- sessions
 
-	// A fresh session. It takes over the tab on screen unless pi is busy there, in which
-	// case it opens beside it: starting something new never cuts short what is running.
+	// A fresh session, in a tab of its own. A conversation is never swapped out from under the
+	// user: the only tab that gets reused is one with nothing in it.
 	async newSession(): Promise<void> {
-		const tab = this.current();
+		this.init();
 		this.drawer.close();
-		if (tab.isEmpty) return tab.focusComposer();
-		if (tab.replaceable) return tab.newSession();
 		this.newTab();
 	}
 
-	// Same rule as newSession, unless `newTab` asks for a tab of its own.
-	async openSession(path: string, newTab = false): Promise<void> {
-		const current = this.current();
+	async openSession(path: string): Promise<void> {
+		this.init();
 		// Two pi processes appending to one session file would corrupt it; go to the tab that has it.
 		const holder = this.plugin.holderOf(path);
 		if (holder) return holder.view.revealTab(holder.tab);
@@ -338,14 +334,10 @@ export class ChatView extends ItemView {
 			new Notice("That session file no longer exists.");
 			return void this.drawer.refresh();
 		}
-		if (newTab || !current.replaceable) {
-			const empty = this.tabs.find((tab) => tab.isEmpty);
-			if (!empty) return void this.addTab({ sessionFile: path });
-			this.activate(empty);
-			return empty.load(path);
-		}
-		this.drawer.close();
-		await current.load(path);
+		const empty = this.tabs.find((tab) => tab.isEmpty);
+		if (!empty) return void this.addTab({ sessionFile: path });
+		this.activate(empty);
+		await empty.load(path);
 	}
 
 	toggleSessions(): void {

@@ -34,7 +34,7 @@ This plugin puts a coding agent in your vault. Read this first.
 
 ## Sessions
 
-The toolbar at the top of the panel shows the session name, with buttons for a new session, the session list and a menu. The clock button opens the session list for the vault: search it, move with the arrow keys, Enter to open. Right-click a session (or use its `…` button) to open it in a new tab, rename, duplicate or move it to the system trash. Unnamed sessions are listed by their first prompt. Rename the session on screen from the `⋮` menu.
+The toolbar at the top of the panel shows the session name, with buttons for a new session, the session list and a menu. The clock button opens the session list for the vault: search it, move with the arrow keys, Enter to open. Right-click a session (or use its `…` button) to rename, duplicate or move it to the system trash. Unnamed sessions are listed by their first prompt. Rename the session on screen from the `⋮` menu.
 
 ### Tabs
 
@@ -50,7 +50,7 @@ The panel can hold several conversations at once. Click the session name to see 
 
 The most pressing of these marks for the tabs you are *not* looking at is also shown beside the session name, so you can tell without opening the list. A question from a background tab also raises a toast; click it to go there.
 
-Starting something new never interrupts pi. **New session** (`+`) and opening a session from the list reuse the tab on screen when it is idle, and open a tab beside it when pi is busy there or waiting for an answer. **New tab** (in the tab list, the `⋮` menu or the command palette) always keeps the current conversation open. Closing a tab stops its pi; the conversation stays in the session list. Obsidian's workspace layout brings the tabs back after a restart.
+Every conversation keeps its tab. **New session** (`+`), **New tab** and opening a session from the list all open a tab of their own; the only tab that gets reused is an empty one. Closing a tab stops its pi; the conversation stays in the session list. Obsidian's workspace layout brings the tabs back after a restart.
 
 A session file only ever belongs to one tab: opening a session that another tab holds takes you to that tab, because two pi processes writing one file would corrupt it. The plugin can't see pi running in a terminal, so avoid having the same session open in both at once. **Open another chat panel** (command palette) adds a second panel with tabs of its own, for two conversations side by side.
 
