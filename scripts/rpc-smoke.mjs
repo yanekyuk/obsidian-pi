@@ -35,7 +35,8 @@ export { prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/
 export { disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } from ${JSON.stringify(join(root, "src/packages.ts"))};
 export { scopeModels } from ${JSON.stringify(join(root, "src/models.ts"))};
 export { savedTabsFrom, panelsIn } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};
-export { splitTitle, markdownOf } from ${JSON.stringify(join(root, "src/view/writeBack.ts"))};`,
+export { splitTitle, markdownOf } from ${JSON.stringify(join(root, "src/view/writeBack.ts"))};
+export { commandAllowed } from ${JSON.stringify(join(root, "src/obsidianControl.ts"))};`,
 );
 // sessions.ts reaches prompt.ts, which imports the Obsidian API; outside the app a stub will do.
 const obsidianStub = {
@@ -43,13 +44,13 @@ const obsidianStub = {
 	setup(build) {
 		build.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "stub" }));
 		build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
-			contents: "export class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');",
+			contents: "export class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');\nexport const getAllTags = () => [];",
 		}));
 	},
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf } =
+const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -248,6 +249,13 @@ const check = (ok, label, detail = "") => {
 	check(splitTitle("# " + "x".repeat(100)).title.length === 60, "splitTitle: names are cut to 60 characters");
 }
 
+// ---- Obsidian commands: which ids the allowlist lets pi run
+{
+	check(!commandAllowed("", "editor:toggle-source") && !commandAllowed("  \n# editor:*\n", "editor:toggle-source"), "commands: an empty list (or only comments) allows nothing");
+	check(commandAllowed("*", "anything:at-all") && commandAllowed("editor:*\napp:reload", "app:reload") && commandAllowed("editor:*", "Editor:Toggle-Source"), "commands: * matches all, a prefix glob its ids, case ignored");
+	check(!commandAllowed("editor:*", "workspace:split") && !commandAllowed("editor:toggle", "editor:toggle-source") && !commandAllowed("a.b", "aXb"), "commands: no partial or prefix match without *, and a dot is a dot");
+}
+
 // ---- tabs: what the title shows for the tabs out of sight, and what the layout brings back
 {
 	const tabs = (...statuses) => statuses.map((status) => ({ status }));
@@ -419,10 +427,15 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 	const isolatedDir = join(work, "isolated-agent");
 	await prepareAgentDir(work, undefined, undefined, isolatedDir);
 	const isolated = new PiRpcClient();
-	await isolated.start({ binary: "pi", args: ["--no-session", "--no-skills"], cwd: work, env: { ...env, PI_CODING_AGENT_DIR: isolatedDir } });
+	let isolatedExit = null;
+	isolated.onExit((info) => (isolatedExit = info));
+	// With the plugin's own extensions loaded the way the panel loads them.
+	const extensions = ["browser", "obsidian"].flatMap((name) => ["-e", join(root, "pi-extension", `${name}.ts`)]);
+	await isolated.start({ binary: "pi", args: ["--no-session", "--no-skills", ...extensions], cwd: work, env: { ...env, PI_CODING_AGENT_DIR: isolatedDir } });
 	const theirs = await isolated.getCommands();
 	const usable = await isolated.getAvailableModels();
 	await isolated.stop();
+	check(isolatedExit && !/error|failed/i.test(isolatedExit.stderr), "the plugin's browser and obsidian extensions load without complaint", isolatedExit?.stderr.slice(0, 200));
 	check(usable.length > 0, "isolated pi: the linked credentials give it models to use", `${usable.length} models`);
 	// pi ships a few extensions of its own inline (llama.cpp); those aren't the user's.
 	const builtIn = (c) => (c.sourceInfo?.path ?? "").startsWith("<inline:");

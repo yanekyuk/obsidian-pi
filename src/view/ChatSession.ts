@@ -4,6 +4,7 @@ import { homedir } from "os";
 import { basename, relative, resolve } from "path";
 import { readAdvisorConfig, writeAdvisorConfig } from "../advisor";
 import { BROWSER_CHANNEL } from "../browser";
+import { OBSIDIAN_CHANNEL } from "../obsidianControl";
 import type PiAgentPlugin from "../main";
 import { probeMcp, unusableMcpServers, vaultMcpServers } from "../mcp";
 import { readActiveContext, splitContext, withContext } from "../prompt";
@@ -1067,9 +1068,11 @@ export class ChatSession {
 	}
 
 	private onExtensionUi(req: ExtensionUiRequest): void {
-		// Not a question for the user: one of pi's browser_* tools asking Obsidian to act (see browser.ts).
-		if (req.method === "input" && req.title === BROWSER_CHANNEL) {
-			void this.plugin.browser.handle(req.placeholder).then((value) => {
+		// Not a question for the user: one of pi's browser_* or obsidian_* tools asking Obsidian to
+		// act (see browser.ts and obsidianControl.ts).
+		const control = req.title === BROWSER_CHANNEL ? this.plugin.browser : req.title === OBSIDIAN_CHANNEL ? this.plugin.obsidian : null;
+		if (req.method === "input" && control) {
+			void control.handle(req.placeholder).then((value) => {
 				if (this.client.running) this.client.respondToUi(req.id, { value });
 			});
 			return;

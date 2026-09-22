@@ -31,6 +31,10 @@ export interface PiAgentSettings {
 	hiddenTodos: Record<string, string[]>;
 	connectMcpOnStart: boolean;
 	browserControl: boolean;
+	// pi's obsidian_* tools: metadata cache, properties, commands.
+	obsidianControl: boolean;
+	// Command ids pi may run, one glob per line; empty means none.
+	commandAllowlist: string;
 	// The model picker's last view: all models, or pi's scoped list (enabledModels).
 	showAllModels: boolean;
 }
@@ -58,6 +62,8 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	hiddenTodos: {},
 	connectMcpOnStart: true,
 	browserControl: false,
+	obsidianControl: true,
+	commandAllowlist: "",
 	showAllModels: false,
 };
 
@@ -191,6 +197,28 @@ export class PiAgentSettingTab extends PluginSettingTab {
 					await save();
 				}),
 			);
+
+		new Setting(containerEl)
+			.setName("Let pi use Obsidian")
+			.setDesc("Gives pi tools for what only the running app knows: backlinks, tags, aliases and headings from the metadata cache, property edits that keep the YAML well-formed, opening a note for you, and the command palette. Reload pi after changing this.")
+			.addToggle((t) =>
+				t.setValue(s.obsidianControl).onChange(async (v) => {
+					s.obsidianControl = v;
+					await save();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Commands pi may run")
+			.setDesc("Obsidian command ids pi is allowed to run, one per line. * stands for anything: editor:* allows every editor command, * alone allows all of them. Leave empty to let pi list commands but run none. Find ids with the obsidian_commands tool or in Settings → Hotkeys.")
+			.addTextArea((t) => {
+				t.setPlaceholder("editor:*\nworkspace:*\napp:reload").setValue(s.commandAllowlist);
+				t.inputEl.rows = 4;
+				t.onChange(async (v) => {
+					s.commandAllowlist = v;
+					await save();
+				});
+			});
 
 		new Setting(containerEl)
 			.setName("Connect the vault's MCP servers when pi starts")

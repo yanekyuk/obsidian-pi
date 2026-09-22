@@ -57,6 +57,21 @@ A session file only ever belongs to one tab: opening a session that another tab 
 
 These are pi's normal session files for the vault directory, so a conversation started here can be resumed in a terminal with `pi --resume`, and the other way round. Renaming goes through pi, which only names the session it has loaded, so renaming another session opens it first. pi does not allow clearing a name over RPC.
 
+## Obsidian tools
+
+pi's usual tools see the vault as files. Some things only the running app knows, and **Settings → Let pi use Obsidian** (on by default) gives pi tools for them:
+
+| Tool | What it does |
+| --- | --- |
+| `obsidian_note_info` | A note's properties, aliases, tags, headings, the notes it links to, links that point nowhere, and the notes that link to it, straight from Obsidian's metadata cache. |
+| `obsidian_tags` | The vault's tags with counts, or the notes carrying one tag. Nested tags count for their parents. |
+| `obsidian_set_properties` | Sets or removes properties through Obsidian, which keeps the YAML well-formed and the rest of the note untouched. |
+| `obsidian_open` | Shows you a note, optionally at a heading. |
+| `obsidian_commands` | Lists the command palette: core commands and those of your plugins, with ids. |
+| `obsidian_run_command` | Runs a command by id, as if you had picked it from the palette. |
+
+Running commands is gated by **Commands pi may run**, one id pattern per line (`editor:*`, `app:reload`, or `*` for everything). The list starts empty: pi can see the palette but run nothing until you say so. The other tools only read, except `obsidian_set_properties`, which does what pi could already do by editing the file, only more carefully.
+
 ## Web viewer
 
 Obsidian can open web pages in a tab (the Web viewer core plugin). With **Settings → Let pi use the web viewer** switched on, pi can drive it, and you watch it happen:
@@ -72,7 +87,7 @@ Obsidian can open web pages in a tab (the Web viewer core plugin). With **Settin
 
 It is off by default, for a reason: the web viewer keeps you logged in to sites, so pi acts there as you, and a page pi reads can contain text written to steer it. Switch it on when you want it.
 
-How it works: the tools are a small pi extension that ships inside the plugin. pi is a child process and the web viewer lives inside Obsidian, so a tool call crosses over on the channel the two already share, a dialog request that the panel recognises and answers itself. No port is opened and nothing else on the machine can reach it.
+How it works, for these and the Obsidian tools above: each set is a small pi extension that ships inside the plugin. pi is a child process and the web viewer lives inside Obsidian, so a tool call crosses over on the channel the two already share, a dialog request that the panel recognises and answers itself. No port is opened and nothing else on the machine can reach it.
 
 ## Separate from your terminal pi
 
