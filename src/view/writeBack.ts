@@ -39,12 +39,18 @@ export async function appendToNote(app: App, text: string): Promise<boolean> {
 }
 
 // A note named after the reply's heading or first line, next to the active note, opened beside it.
-export async function createNoteFrom(app: App, text: string): Promise<TFile | null> {
+export async function createNoteFrom(app: App, text: string): Promise<TFile> {
 	const { title, body } = splitTitle(text);
+	return createNote(app, title, body);
+}
+
+// A new note where Obsidian puts new notes, with a number added when the name is taken, opened in a tab.
+export async function createNote(app: App, title: string, body: string): Promise<TFile> {
+	const name = fileNameOf(title) || "pi reply";
 	const folder = app.fileManager.getNewFileParent(app.workspace.getActiveFile()?.path ?? "");
 	const base = folder.path === "/" ? "" : `${folder.path}/`;
-	let path = normalizePath(`${base}${title}.md`);
-	for (let n = 2; app.vault.getAbstractFileByPath(path); n++) path = normalizePath(`${base}${title} ${n}.md`);
+	let path = normalizePath(`${base}${name}.md`);
+	for (let n = 2; app.vault.getAbstractFileByPath(path); n++) path = normalizePath(`${base}${name} ${n}.md`);
 	const file = await app.vault.create(path, body);
 	await app.workspace.getLeaf("tab").openFile(file);
 	return file;

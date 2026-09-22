@@ -141,9 +141,20 @@ export class ChatView extends ItemView {
 		if (this.tabs.length > 1) menu.addItem((i) => i.setTitle("Close tab").setIcon("x").onClick(() => void this.closeTab(tab)));
 		menu.addSeparator();
 		menu.addItem((i) => i.setTitle("Rename session…").setIcon("pencil").onClick(() => void tab.renameCurrent()));
+		const note = this.app.workspace.getActiveFile();
+		if (note && note.extension === "md") {
+			const linked = tab.isLinkedTo(note);
+			menu.addItem((i) =>
+				i
+					.setTitle(linked ? `Unlink from "${note.basename}"` : `Link session to "${note.basename}"`)
+					.setIcon(linked ? "unlink" : "link")
+					.onClick(() => (linked ? void tab.unlinkFrom(note) : tab.linkToNote(note))),
+			);
+		}
 		const advisor = readAdvisorConfig().modelKey;
 		menu.addItem((i) => i.setTitle(advisor ? `Advisor: ${advisor}…` : "Set advisor model…").setIcon("graduation-cap").onClick(() => void tab.configureAdvisor()));
 		menu.addItem((i) => i.setTitle("Compact context").setIcon("fold-vertical").onClick(() => void tab.compact()));
+		menu.addItem((i) => i.setTitle("Export conversation to a note").setIcon("file-output").onClick(() => void tab.exportToNote()));
 		menu.addSeparator();
 		menu.addItem((i) => i.setTitle("Settings…").setIcon("settings").onClick(() => this.plugin.openSettings()));
 	}
@@ -247,7 +258,7 @@ export class ChatView extends ItemView {
 	}
 
 	// The tab on screen. Commands can arrive before the panel has opened its tabs.
-	private current(): ChatSession {
+	current(): ChatSession {
 		this.init();
 		return this.active as ChatSession;
 	}
@@ -276,8 +287,13 @@ export class ChatView extends ItemView {
 		if (!this.titleEl) return;
 		this.renderTitle();
 		this.switcher.update();
+		this.plugin.statusBar.refresh();
 		// Refreshes the workspace tab's title, which shows the session name.
 		(this.leaf as WorkspaceLeaf & { updateHeader?: () => void }).updateHeader?.();
+	}
+
+	allTabs(): ChatSession[] {
+		return [...this.tabs];
 	}
 
 	tabFor(sessionFile: string): ChatSession | null {

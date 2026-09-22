@@ -21,7 +21,10 @@ import { renderInline } from "./markdown";
 import { ModelPicker, pickOne, promptText } from "./modals";
 import { SideQuestions } from "./SideQuestion";
 import { TodoPanel, tasksFrom } from "./TodoPanel";
-import { appendToNote, createNoteFrom, insertIntoNote, markdownOf } from "./writeBack";
+import { appendToNote, createNote, createNoteFrom, insertIntoNote, markdownOf } from "./writeBack";
+import { transcriptMarkdown } from "../exportNote";
+import { linkedSession, writeLink } from "../noteLink";
+import { EDITING_TOOLS, snapshotAfter, snapshotBefore, swapVersion, unchangedSince, type FileSnapshot } from "./revert";
 
 const STICK_TO_BOTTOM_PX = 48;
 const MCP_RECHECK_MS = 30_000;
@@ -106,9 +109,13 @@ export class ChatSession {
 	private sessionFile: string | null;
 	private savedTitle: string;
 	private firstPrompt = "";
+	// A note waiting to be given this tab's session, once pi has said which file that is.
+	private pendingLink: TFile | null = null;
 
 	private live: LiveAssistant | null = null;
 	private toolCards = new Map<string, ToolCard>();
+	// Files as they were before pi's edit and write tools touched them, by tool call.
+	private snapshots = new Map<string, FileSnapshot>();
 	private widgets = new Map<string, { lines: string[]; below: boolean }>();
 	private held: HeldMessage[] = [];
 	private flushing = false;
@@ -619,9 +626,50 @@ export class ChatSession {
 	}
 
 	// Pull pi's session into the view: state, controls and the full transcript.
+	// The conversation so far as a new note.
+	async exportToNote(): Promise<void> {
+		if (!this.client.running) {
+			new Notice("pi isn't running in this tab.");
+			return;
+		}
+		const messages = await this.client.getMessages();
+		if (!messages.length) {
+			new Notice("Nothing to export yet.");
+			return;
+		}
+		const file = await createNote(this.app, this.title, transcriptMarkdown(messages, this.title, this.heldSessionFile));
+		new Notice(`Exported to ${file.basename}.`);
+	}
+
+	// Records this tab's session in the note's properties, now or as soon as pi names the file.
+	linkToNote(note: TFile): void {
+		const sessionFile = this.state?.sessionFile;
+		if (!sessionFile) {
+			this.pendingLink = note;
+			return;
+		}
+		void writeLink(this.app, note, sessionFile).then(() => new Notice(`"${note.basename}" now opens this session.`));
+	}
+
+	async unlinkFrom(note: TFile): Promise<void> {
+		this.pendingLink = null;
+		await writeLink(this.app, note, null);
+	}
+
+	isLinkedTo(note: TFile): boolean {
+		if (this.pendingLink === note) return true;
+		const held = this.heldSessionFile;
+		return held !== null && linkedSession(this.app, note) === basename(held);
+	}
+
 	private async syncSession(): Promise<void> {
 		this.state = await this.client.getState();
 		this.sessionFile = this.state.sessionFile ?? null;
+		if (this.pendingLink && this.state.sessionFile) {
+			const note = this.pendingLink;
+			this.pendingLink = null;
+			this.linkToNote(note);
+		}
 		if (this.state.sessionFile && this.state.sessionFile !== this.plugin.settings.lastSessionFile) {
 			this.plugin.settings.lastSessionFile = this.state.sessionFile;
 			await this.plugin.saveSettings();
@@ -676,6 +724,12 @@ export class ChatSession {
 	}
 
 	// While pi is working, Enter steers the current run and Alt+Enter queues a follow-up.
+	// Sends whatever is in the composer, waiting for pi to come up first if it has to.
+	async sendDraft(): Promise<void> {
+		await this.whenReady();
+		await this.send("followUp");
+	}
+
 	private async send(whileBusy: "steer" | "followUp" = "steer"): Promise<void> {
 		const text = this.inputEl.value.trim();
 		if (!text && !this.attachments.count) return;
@@ -991,6 +1045,10 @@ export class ChatSession {
 			case "tool_execution_start":
 				this.cardFor(e.toolCallId, e.toolName, e.args).setStatus("running");
 				this.setActivity(`Running ${e.toolName}…`);
+				if (EDITING_TOOLS.has(e.toolName) && typeof e.args?.path === "string") {
+					const snapshot = snapshotBefore(this.absolutePath(e.args.path));
+					if (snapshot) this.snapshots.set(e.toolCallId, snapshot);
+				}
 				break;
 			case "tool_execution_update":
 				this.toolCards.get(e.toolCallId)?.setResult(e.partialResult);
@@ -1001,6 +1059,7 @@ export class ChatSession {
 				if (e.toolName === "todo" && !e.isError) this.todos.set(tasksFrom(e.result?.details) ?? null);
 				card.setResult(e.result, e.isError);
 				card.setStatus(e.isError ? "error" : "done");
+				this.offerRevert(e.toolCallId, e.toolName, e.isError);
 				this.setActivity("Working…");
 				this.keepScrolled();
 				break;
@@ -1286,6 +1345,33 @@ export class ChatSession {
 		}
 		if (args) card.setArgs(args);
 		return card;
+	}
+
+	// Once an edit is in, the card can take it back, as long as the file hasn't moved on since.
+	private offerRevert(id: string, toolName: string, isError: boolean): void {
+		const taken = this.snapshots.get(id);
+		this.snapshots.delete(id);
+		if (!taken || isError) return;
+		const card = this.toolCards.get(id);
+		const args = (card?.arguments ?? {}) as Record<string, unknown>;
+		let snapshot = snapshotAfter(taken, toolName, args);
+		if (!snapshot || !card) return;
+		const swap = async () => {
+			if (!unchangedSince(snapshot as FileSnapshot)) {
+				new Notice("The file has changed since this edit, so it is left as it is.");
+				card.setRevert(null);
+				return;
+			}
+			try {
+				snapshot = await swapVersion(this.app, this.plugin.vaultPath, snapshot as FileSnapshot);
+			} catch (err) {
+				new Notice(`Couldn't change the file: ${(err as Error).message}`);
+				return;
+			}
+			card.setRevert(snapshot.current === "after" ? "applied" : "reverted", swap);
+			this.keepScrolled();
+		};
+		card.setRevert("applied", swap);
 	}
 
 	private absolutePath(path: string): string {

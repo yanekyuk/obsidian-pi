@@ -36,7 +36,10 @@ export { disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, repl
 export { scopeModels } from ${JSON.stringify(join(root, "src/models.ts"))};
 export { savedTabsFrom, panelsIn } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};
 export { splitTitle, markdownOf } from ${JSON.stringify(join(root, "src/view/writeBack.ts"))};
-export { commandAllowed } from ${JSON.stringify(join(root, "src/obsidianControl.ts"))};`,
+export { commandAllowed } from ${JSON.stringify(join(root, "src/obsidianControl.ts"))};
+export { snapshotBefore, snapshotAfter, unchangedSince } from ${JSON.stringify(join(root, "src/view/revert.ts"))};
+export { transcriptMarkdown } from ${JSON.stringify(join(root, "src/exportNote.ts"))};
+export { resolveLinked, sessionDirs } from ${JSON.stringify(join(root, "src/noteLink.ts"))};`,
 );
 // sessions.ts reaches prompt.ts, which imports the Obsidian API; outside the app a stub will do.
 const obsidianStub = {
@@ -50,7 +53,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed } =
+const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -254,6 +257,48 @@ const check = (ok, label, detail = "") => {
 	check(!commandAllowed("", "editor:toggle-source") && !commandAllowed("  \n# editor:*\n", "editor:toggle-source"), "commands: an empty list (or only comments) allows nothing");
 	check(commandAllowed("*", "anything:at-all") && commandAllowed("editor:*\napp:reload", "app:reload") && commandAllowed("editor:*", "Editor:Toggle-Source"), "commands: * matches all, a prefix glob its ids, case ignored");
 	check(!commandAllowed("editor:*", "workspace:split") && !commandAllowed("editor:toggle", "editor:toggle-source") && !commandAllowed("a.b", "aXb"), "commands: no partial or prefix match without *, and a dot is a dot");
+}
+
+// ---- undo for pi's edits: what the panel keeps of a file around an edit or write
+{
+	const file = join(work, "edited.md");
+	writeFileSync(file, "one two three");
+	let snap = snapshotBefore(file);
+	writeFileSync(file, "one 2 three");
+	let done = snapshotAfter(snap, "edit", { oldText: "two", newText: "2" });
+	check(done?.before === "one two three" && done.after === "one 2 three" && unchangedSince(done), "undo: an edit seen from before keeps both versions");
+	// The before reading came after pi had already written: recovered from the arguments.
+	snap = snapshotBefore(file);
+	done = snapshotAfter(snap, "edit", { oldText: "two", newText: "2" });
+	check(done?.before === "one two three" && done.after === "one 2 three", "undo: a late reading is recovered from the edit's own old and new text");
+	check(snapshotAfter(snapshotBefore(file), "edit", { oldText: "x", newText: "e" }) === undefined, "undo: not offered when the new text isn't in the file exactly once");
+	const fresh = join(work, "fresh.md");
+	snap = snapshotBefore(fresh);
+	writeFileSync(fresh, "new");
+	done = snapshotAfter(snap, "write", { content: "new" });
+	check(snap.before === null && done?.after === "new", "undo: a write that created the file remembers it wasn't there");
+	check(snapshotAfter(snapshotBefore(fresh), "write", { content: "new" }) === undefined, "undo: a write seen too late (nothing changed) offers nothing");
+	writeFileSync(fresh, "changed by hand");
+	check(!unchangedSince(done), "undo: a file changed since the edit is recognised");
+}
+
+// ---- a conversation as a note, and the note ↔ session link
+{
+	const messages = [
+		{ role: "user", content: "<obsidian-context>\nActive note: Inbox/Todo.md\nSelected text:\nbuy milk\n</obsidian-context>\n\nWhat's this?" },
+		{ role: "assistant", content: [{ type: "thinking", thinking: "private" }, { type: "toolCall", id: "1", name: "read", arguments: { path: "Inbox/Todo.md" } }, { type: "text", text: "A shopping list.  " }] },
+		{ role: "toolResult", toolCallId: "1", toolName: "read", content: [{ type: "text", text: "secret output" }], isError: false },
+		{ role: "user", content: [{ type: "image", data: "…", mimeType: "image/png" }] },
+		{ role: "assistant", content: [{ type: "text", text: "" }], stopReason: "aborted" },
+	];
+	const note = transcriptMarkdown(messages, "Milk", "/s/2026-01-01_abc.jsonl", new Date("2026-09-22T10:00:00Z"));
+	check(note.startsWith("---\npi-session: 2026-01-01_abc.jsonl\nexported: 2026-09-22\n---\n\n# Milk\n\n**You**\n\n*Looking at [[Inbox/Todo]], with a selection*\n\nWhat's this?\n\n---\n\n**pi**\n\n> ⚙ `read` Inbox/Todo.md\n\nA shopping list.\n"), "export: properties, title, turns with context, tool calls as asides", JSON.stringify(note.slice(0, 200)));
+	check(!note.includes("private") && !note.includes("secret output") && !note.includes("**pi**\n\n\n"), "export: thinking, tool output and empty turns stay out");
+	mkdirSync(join(work, "sessions-a"), { recursive: true });
+	writeFileSync(join(work, "sessions-a", "one.jsonl"), "");
+	check(resolveLinked("one.jsonl", [null, join(work, "nope"), join(work, "sessions-a")]) === join(work, "sessions-a", "one.jsonl") && resolveLinked("two.jsonl", [join(work, "sessions-a")]) === null, "link: a stored file name is found in the first folder that has it");
+	check(resolveLinked(join(work, "sessions-a", "one.jsonl"), []) && !resolveLinked("/nowhere/x.jsonl", []), "link: an absolute value stands on its own");
+	check(sessionDirs("/a", "/b/x.jsonl").join() === "/a,/b" && sessionDirs("/a", "/a/x.jsonl").join() === "/a" && sessionDirs("/a", "").join() === "/a", "link: folders to search are the configured one and the last session's, once each");
 }
 
 // ---- tabs: what the title shows for the tabs out of sight, and what the layout brings back

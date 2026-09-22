@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Notice, Plugin, addIcon, type Editor } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, TFile, addIcon, type Editor } from "obsidian";
 import { existsSync, promises as fs } from "fs";
 import { homedir } from "os";
 import { basename, delimiter, isAbsolute, join, resolve } from "path";
@@ -8,6 +8,8 @@ import { MCP_ADAPTER, Requirements } from "./requirements";
 import { BrowserControl } from "./browser";
 import { ObsidianControl } from "./obsidianControl";
 import { extractBundledFiles } from "./bundled";
+import { StatusBar } from "./statusBar";
+import { linkedSession, resolveLinked, sessionDirs } from "./noteLink";
 import { resolveEnv } from "./env";
 import { buildSystemPrompt } from "./prompt";
 import type { PiSpawnOptions } from "./rpc/PiRpcClient";
@@ -25,6 +27,7 @@ export default class PiAgentPlugin extends Plugin {
 	settings: PiAgentSettings = DEFAULT_SETTINGS;
 	browser = new BrowserControl(this.app);
 	obsidian = new ObsidianControl(this.app, () => this.settings.commandAllowlist);
+	statusBar!: StatusBar;
 
 	requirements = new Requirements({
 		piCommand: () => this.piCommand(),
@@ -58,6 +61,11 @@ export default class PiAgentPlugin extends Plugin {
 		this.registerHoverLinkSource(VIEW_TYPE_PI, { display: "Pi Harness", defaultMod: true });
 		this.addSettingTab(new PiAgentSettingTab(this.app, this));
 		this.addRibbonIcon("pi", "Open pi", () => void this.activateView());
+		this.statusBar = new StatusBar(this, () => this.chatViews(), (tab) => void this.chatViews().find((view) => view.allTabs().includes(tab))?.revealTab(tab));
+
+		// obsidian://pi-harness?prompt=…  puts the words in the composer of a new tab; &send=1 sends
+		// them; &note=Folder/Note opens pi for that note; &session=<file name> opens that session.
+		this.registerObsidianProtocolHandler("pi-harness", (params) => void this.handleUri(params));
 
 		// Well after startup, so it never competes with Obsidian loading or pi's first start. After
 		// that it keeps asking: the update itself decides whether a day has passed and pi is idle.
@@ -78,6 +86,23 @@ export default class PiAgentPlugin extends Plugin {
 			callback: async () => (await this.activateView())?.newSession(),
 		});
 		this.addCommand({ id: "new-tab", name: "New tab", callback: async () => (await this.activateView())?.newTab() });
+		this.addCommand({
+			id: "open-for-note",
+			name: "Open pi for this note",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!(file instanceof TFile) || file.extension !== "md") return false;
+				if (!checking) void this.openForNote(file);
+				return true;
+			},
+		});
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
+				if (!(file instanceof TFile) || file.extension !== "md") return;
+				menu.addItem((i) => i.setTitle("Open pi for this note").setIcon("pi").onClick(() => void this.openForNote(file)));
+			}),
+		);
+		this.addCommand({ id: "export-session", name: "Export conversation to a note", callback: async () => (await this.activateView())?.current().exportToNote() });
 		this.addCommand({ id: "close-tab", name: "Close tab", callback: async () => (await this.activateView())?.closeCurrentTab() });
 		this.addCommand({ id: "switch-tab", name: "Switch tab", callback: async () => (await this.activateView())?.showTabs() });
 		this.addCommand({ id: "new-panel", name: "Open another chat panel", callback: () => void this.openNewPanel() });
@@ -255,6 +280,42 @@ export default class PiAgentPlugin extends Plugin {
 	}
 
 	// Focuses the chat the user was last in, or opens the first one.
+	private async handleUri(params: Record<string, string>): Promise<void> {
+		const view = await this.activateView();
+		if (!view) return;
+		if (params.session) {
+			const path = resolveLinked(params.session, sessionDirs(this.sessionDir(), this.settings.lastSessionFile));
+			if (!path) return void new Notice("No such pi session here.");
+			await view.openSession(path);
+		} else if (params.note) {
+			const file = this.app.vault.getAbstractFileByPath(params.note.endsWith(".md") ? params.note : `${params.note}.md`);
+			if (!(file instanceof TFile)) return void new Notice(`No note at ${params.note}.`);
+			await this.openForNote(file);
+		} else if (params.prompt) view.newTab();
+		if (!params.prompt) return;
+		const tab = view.current();
+		tab.insertText(params.prompt);
+		if (params.send && params.send !== "0" && params.send !== "false") await tab.sendDraft();
+	}
+
+	// Where the panel's pi keeps this vault's sessions.
+	sessionDir(): string {
+		const s = this.settings;
+		return s.isolate && !s.inherit.sessions ? sessionDirFor(this.vaultPath, HARNESS_AGENT_DIR) : sessionDirFor(this.vaultPath);
+	}
+
+	// The note's own session when it has one here; otherwise a new tab that becomes its session.
+	async openForNote(file: TFile): Promise<void> {
+		const view = await this.activateView();
+		if (!view) return;
+		const linked = linkedSession(this.app, file);
+		const path = linked ? resolveLinked(linked, sessionDirs(this.sessionDir(), this.settings.lastSessionFile)) : null;
+		if (path) return view.openSession(path);
+		if (linked) new Notice("The session linked to this note isn't on this machine, so a new one starts.");
+		view.newTab();
+		view.current().linkToNote(file);
+	}
+
 	async activateView(): Promise<ChatView | null> {
 		const { workspace } = this.app;
 		const active = workspace.getActiveViewOfType(ChatView);

@@ -19,7 +19,7 @@ This plugin puts a coding agent in your vault. Read this first.
 
 - Streams replies as Obsidian Markdown. Wikilinks in replies are clickable and show hover previews.
 - Markdown renders everywhere the model's words appear, not only in replies: question cards (options, descriptions), the task list, queued messages, side questions and the answers shown on question cards. Links in those places work too.
-- Shows thinking and tool calls as collapsible blocks. Edits render as diffs. A file path on a card has an open button: vault files open in Obsidian (Cmd-click for a new tab), anything else opens in the system's default app. Image paths also get a button that shows the picture inside the card, and pictures a tool returns appear under its output.
+- Shows thinking and tool calls as collapsible blocks. Edits render as diffs, and an edit or write pi made can be undone from its card (and redone), as long as the file hasn't changed since. The panel keeps the before and after versions in memory only; Obsidian's File Recovery is there for the rest. A file path on a card has an open button: vault files open in Obsidian (Cmd-click for a new tab), anything else opens in the system's default app. Image paths also get a button that shows the picture inside the card, and pictures a tool returns appear under its output.
 - Shares the active note and your selection with pi. Click the note chip in the composer to turn that off for a message.
 - Puts replies back into the vault. Hovering a reply shows four buttons: copy it as Markdown, insert it into the open note at the cursor (in place of the selection, if there is one), append it to the open note, or make a new note from it. A new note is named after the reply's top heading or first line and created where Obsidian puts new notes.
 - Paste or drop images into the composer. They are scaled to 2000px at most, the bound pi uses for images it reads itself, and show up in the transcript.
@@ -34,6 +34,12 @@ This plugin puts a coding agent in your vault. Read this first.
 - Warns when an HTTP MCP server in the vault's `.mcp.json` is unavailable, such as the one from the Vault as MCP plugin. pi's MCP adapter connects lazily and reports "enabled" either way, so the panel sends each server a real MCP `initialize` when pi starts and at most every 30 seconds as runs begin. Click the warning to check again.
 
 ## Sessions
+
+A note can own a session. **Open pi for this note** (command palette, or the note's right-click menu) opens the session linked to the note, or starts one and writes its file name into the note's `pi-session` property. The panel's `⋮` menu links or unlinks the tab on screen by hand. Only the session's file name is stored, so the link is worth the same on another machine that has the session. **Export conversation to a note** (`⋮` menu or command) writes what was said, with tool calls as one-line asides and without thinking or tool output, into a new note that carries the same `pi-session` property.
+
+While the panel is closed or out of sight, the status bar shows what pi is doing (working, or waiting for an answer); clicking it goes to that tab.
+
+`obsidian://pi-harness?prompt=…` opens the panel with the words in the composer of a new tab, from Shortcuts, Raycast or a link; add `&send=1` to send them, `&note=Folder/Note` to open pi for that note first, or use `?session=<file name>` to open a session.
 
 The toolbar at the top of the panel shows the session name, with buttons for a new session, the session list and a menu. The clock button opens the session list for the vault: search it, move with the arrow keys, Enter to open. Right-click a session (or use its `…` button) to rename, duplicate or move it to the system trash. Unnamed sessions are listed by their first prompt. Rename the session on screen from the `⋮` menu.
 

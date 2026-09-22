@@ -150,6 +150,8 @@ export class ToolCard {
 	private renderer: ToolRenderer | undefined;
 	private args: Record<string, unknown> = {};
 	private resultHasImages = false;
+	private revertEl: HTMLElement | null = null;
+	private revertNoteEl: HTMLElement | null = null;
 
 	constructor(
 		parent: HTMLElement,
@@ -168,6 +170,10 @@ export class ToolCard {
 		this.statusEl = summary.createSpan({ cls: "pi-tool-status" });
 		this.bodyEl = this.details.createDiv({ cls: "pi-tool-body" });
 		this.setStatus("pending");
+	}
+
+	get arguments(): Record<string, unknown> {
+		return this.args;
 	}
 
 	setArgs(args: Record<string, unknown>, result?: ToolResult): void {
@@ -240,6 +246,23 @@ export class ToolCard {
 		img.addEventListener("load", () => this.host.onContentChanged());
 		img.addEventListener("click", () => img.toggleClass("is-expanded", !img.hasClass("is-expanded")));
 		return img;
+	}
+
+	// An undo (or, once undone, redo) button for an edit the panel can take back.
+	setRevert(state: "applied" | "reverted" | null, run?: () => void): void {
+		this.revertEl?.remove();
+		this.revertNoteEl?.remove();
+		this.revertEl = this.revertNoteEl = null;
+		if (!state || !run) return;
+		const undone = state === "reverted";
+		this.revertEl = this.summaryEl.createEl("button", { cls: "pi-tool-action clickable-icon", attr: { "aria-label": undone ? "Redo this edit" : "Undo this edit" } });
+		setIcon(this.revertEl, undone ? "redo-2" : "undo-2");
+		this.revertEl.addEventListener("click", (evt) => {
+			evt.preventDefault();
+			evt.stopPropagation();
+			run();
+		});
+		if (undone) this.revertNoteEl = this.bodyEl.createDiv({ cls: "pi-msg-notice", text: "Undone: the file is back to how it was before this edit. pi doesn't know." });
 	}
 
 	setStatus(status: "pending" | "running" | "done" | "error"): void {

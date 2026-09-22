@@ -1306,3 +1306,20 @@ textarea.pi-input:active {
 .pi-model-unavailable {
 	color: var(--text-faint);
 }
+
+/* Status bar: pi's state while the panel is out of sight. */
+.pi-status-bar {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-2);
+}
+.pi-status-bar-icon .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+.pi-status-bar[data-status="working"] .svg-icon {
+	animation: pi-spin 1.2s linear infinite;
+}
+.pi-status-bar[data-status="asking"] {
+	color: var(--text-accent);
+}
