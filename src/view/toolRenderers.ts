@@ -6,7 +6,7 @@ import { renderInline } from "./markdown";
 import { tasksFrom } from "./TodoPanel";
 
 // Presentation for tools whose results carry structure worth showing: the rpiv
-// extensions the plugin requires. Tools not listed here get the generic card.
+// extensions the plugin requires, and the plugin's own obsidian_search. Tools not listed here get the generic card.
 export interface ToolRenderer {
 	icon: string;
 	label?: string;
@@ -123,7 +123,40 @@ const webFetch: ToolRenderer = {
 	},
 };
 
+interface NoteHit {
+	path: string;
+	headings: string[];
+	snippet: string;
+}
+
+// Characters that would end or split a wikilink, taken out of the shown text.
+const linkLabel = (text: string) => text.replace(/[[\]|#^]/g, "");
+
+const obsidianSearch: ToolRenderer = {
+	icon: "search",
+	label: "search notes",
+	summary(args, result) {
+		const hits = (result?.details as { hits?: unknown[] } | null | undefined)?.hits;
+		const count = Array.isArray(hits) ? ` \u00b7 ${hits.length} section${hits.length === 1 ? "" : "s"}` : "";
+		return `${str(args.query)}${count}`;
+	},
+	body(el, result, host) {
+		const hits = (result.details as { hits?: NoteHit[] } | null | undefined)?.hits;
+		if (!Array.isArray(hits) || !hits.length) return false;
+		const list = el.createDiv({ cls: "pi-tool-rich pi-results" });
+		for (const hit of hits) {
+			const row = list.createDiv({ cls: "pi-result" });
+			const note = hit.path.replace(/\.md$/, "");
+			const label = [note.split("/").pop() ?? note, ...hit.headings].map(linkLabel).join(" \u203a ");
+			renderInline(host, row.createDiv({ cls: "pi-result-title" }), `[[${note}|${label}]]`);
+			row.createDiv({ cls: "pi-result-snippet", text: hit.snippet });
+		}
+		return true;
+	},
+};
+
 export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
+	obsidian_search: obsidianSearch,
 	todo,
 	ask_user_question: askUserQuestion,
 	advisor,

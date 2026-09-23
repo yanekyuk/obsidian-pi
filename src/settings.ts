@@ -29,6 +29,8 @@ export interface PiAgentSettings {
 	obsidianControl: boolean;
 	// Command ids pi may run, one glob per line; empty means none.
 	commandAllowlist: string;
+	// Send the model stand-ins for bulky tool output from older turns (pi-extension/trim-tool-output.ts).
+	trimToolOutput: boolean;
 	// The model picker's last view: all models, or pi's scoped list (enabledModels).
 	showAllModels: boolean;
 }
@@ -53,6 +55,7 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	browserControl: false,
 	obsidianControl: true,
 	commandAllowlist: "",
+	trimToolOutput: true,
 	showAllModels: false,
 };
 
@@ -169,7 +172,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Let pi use Obsidian")
-			.setDesc("Gives pi tools for what only the running app knows: backlinks, tags, aliases and headings from the metadata cache, property edits that keep the YAML well-formed, opening a note for you, and the command palette. Reload pi after changing this.")
+			.setDesc("Gives pi tools for what only the running app knows: ranked search of your notes, section by section, kept current as you edit; backlinks, tags, aliases and headings from the metadata cache, property edits that keep the YAML well-formed, opening a note for you, and the command palette. Reload pi after changing this.")
 			.addToggle((t) =>
 				t.setValue(s.obsidianControl).onChange(async (v) => {
 					s.obsidianControl = v;
@@ -217,6 +220,16 @@ export class PiAgentSettingTab extends PluginSettingTab {
 			.addToggle((t) =>
 				t.setValue(s.includeActiveNote).onChange(async (v) => {
 					s.includeActiveNote = v;
+					await save();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Trim old tool output")
+			.setDesc("Before each reply, the model gets a one-line stand-in instead of the bulky output of tool calls from more than a few messages ago: notes read in full, fetched pages, screenshots. pi can run the tool again if it needs it. A conversation then goes longer before pi has to compact it. The session and the panel keep everything. Reload pi after changing this.")
+			.addToggle((t) =>
+				t.setValue(s.trimToolOutput).onChange(async (v) => {
+					s.trimToolOutput = v;
 					await save();
 				}),
 			);

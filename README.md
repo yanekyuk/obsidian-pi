@@ -70,6 +70,7 @@ pi's usual tools see the vault as files. Some things only the running app knows,
 
 | Tool | What it does |
 | --- | --- |
+| `obsidian_search` | Ranked search of the vault by words. It answers with sections, not whole notes: the note, the headings the section sits under, its line range and a snippet, so pi can read just those lines. |
 | `obsidian_note_info` | A note's properties, aliases, tags, headings, the notes it links to, links that point nowhere, and the notes that link to it, straight from Obsidian's metadata cache. |
 | `obsidian_tags` | The vault's tags with counts, or the notes carrying one tag. Nested tags count for their parents. |
 | `obsidian_set_properties` | Sets or removes properties through Obsidian, which keeps the YAML well-formed and the rest of the note untouched. |
@@ -78,6 +79,31 @@ pi's usual tools see the vault as files. Some things only the running app knows,
 | `obsidian_run_command` | Runs a command by id, as if you had picked it from the palette. |
 
 Running commands is gated by **Commands pi may run**, one id pattern per line (`editor:*`, `app:reload`, or `*` for everything). The list starts empty: pi can see the palette but run nothing until you say so. The other tools only read, except `obsidian_set_properties`, which does what pi could already do by editing the file, only more carefully.
+
+### How `obsidian_search` ranks
+
+On a vault, grep returns every line with the word, in file order. `obsidian_search` returns the few sections that are most about it, which costs pi far less context to go through.
+
+- Every note is split at its headings, and long sections at blank lines, and ranked with BM25, the classic keyword ranking.
+- A word in a note's name, aliases, tags or the section's headings counts three times. A section with all the words beats one with some.
+- A search word also finds longer words that start with it: `plan` finds `planning`.
+- Case and accents don't matter: `uzum` finds `Üzüm`, and `isik` finds `Işık` (Turkish ı and İ count as i). Snippets show the words as written.
+- Among the best matches, notes that link to each other rank a little higher. Notes linked with several results, in either direction, are listed as related.
+
+The index is built in memory the first time pi searches (well under a second for a few thousand notes). After that it follows Obsidian's own change, rename and delete events, so results always describe the notes as they are now. Nothing is written to disk and nothing leaves your machine, except the results pi reads.
+
+It matches words, not meaning: "burnout" won't find a note that only says "exhausted". pi is told to try synonyms when a search finds little. A semantic index that would cover this is sketched in [docs/semantic-search.md](docs/semantic-search.md), for later.
+
+## Keeping the context small
+
+The context window fills up mostly with tool output: notes read in full, fetched pages, screenshots. Once it is full, pi compacts, which replaces the older conversation with a summary. With **Settings → Trim old tool output** on (the default), what pi sends the model before each reply is thinner:
+
+- The latest three turns go as they are.
+- In older turns, output of 2,000 characters or more, and any image, is replaced by one line: `[Trimmed from the context to save space: the output of read(path="Projects/Plan.md"), 14210 characters. Run the tool again if you need it.]`
+
+The trimmed part grows three turns at a time rather than on every message. A provider reuses its cached copy of the conversation only up to the first change, so this keeps the cache useful. The session file, the panel and compaction still see every output in full, and switching the setting off (then ↻) sends everything again. It is `pi-extension/trim-tool-output.ts`, loaded with `pi -e` like the tools above.
+
+There is no custom compaction: pi's own summary already carries the lists of files read and changed across compactions, and a replacement would lose them.
 
 ## Web viewer
 
@@ -205,4 +231,4 @@ npm run dev         # rebuild on change
 npm run test:rpc    # check the pi integration without Obsidian (add `-- --prompt` for the live checks: streaming, sessions, images; two small model calls)
 ```
 
-Layout: `src/requirements.ts` inspects recommended packages and owns their manual setup commands, `src/view/toolRenderers.ts` holds the per-tool cards, `src/rpc` is the JSONL client for `pi --mode rpc`, `src/view` is the panel, `src/env.ts` recovers the login shell's `PATH` (apps started from the Dock don't get it), and `src/prompt.ts` holds the system prompt and the active-note context block.
+Layout: `src/requirements.ts` inspects recommended packages and owns their manual setup commands, `src/view/toolRenderers.ts` holds the per-tool cards, `src/rpc` is the JSONL client for `pi --mode rpc`, `src/view` is the panel, `src/env.ts` recovers the login shell's `PATH` (apps started from the Dock don't get it), `src/prompt.ts` holds the system prompt and the active-note context block, and `src/search` is `obsidian_search`: `SearchIndex.ts` ranks (no Obsidian API, tested by `test:rpc`) and `VaultSearch.ts` keeps it fed from the vault. The pi extensions the plugin ships are in `pi-extension/`. Ideas not built yet: [docs/semantic-search.md](docs/semantic-search.md).

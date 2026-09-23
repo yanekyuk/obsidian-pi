@@ -1,12 +1,15 @@
 import { TFile, getAllTags, type App, type CachedMetadata } from "obsidian";
+import type { VaultSearch } from "./search/VaultSearch";
 
-// The Obsidian end of pi's obsidian_* tools (pi-extension/obsidian.ts): the metadata cache,
-// property edits, the command palette. Requests arrive as a dialog request with this title
+// The Obsidian end of pi's obsidian_* tools (pi-extension/obsidian.ts): search, the metadata
+// cache, property edits, the command palette. Requests arrive as a dialog request with this title
 // and leave as its answer, so they never touch the network.
 export const OBSIDIAN_CHANNEL = "pi-harness:obsidian";
 
 const MAX_NOTES = 200;
 const MAX_COMMANDS = 60;
+const DEFAULT_SEARCH_HITS = 8;
+const MAX_SEARCH_HITS = 20;
 
 interface ObsidianRequest {
 	action?: string;
@@ -18,6 +21,8 @@ interface ObsidianRequest {
 	newTab?: boolean;
 	query?: string;
 	id?: string;
+	folder?: string;
+	limit?: number;
 }
 
 interface Command {
@@ -41,6 +46,7 @@ export class ObsidianControl {
 	constructor(
 		private app: App,
 		private allowedCommands: () => string,
+		private vaultSearch: VaultSearch,
 	) {}
 
 	// Always answers, with `{ error }` when something went wrong: pi is blocked on the reply.
@@ -55,6 +61,8 @@ export class ObsidianControl {
 
 	private async run(request: ObsidianRequest): Promise<Record<string, unknown>> {
 		switch (request.action) {
+			case "search":
+				return this.search(request.query ?? "", request.folder, request.limit);
 			case "note_info":
 				return this.noteInfo(this.note(request.path));
 			case "tags":
@@ -84,6 +92,13 @@ export class ObsidianControl {
 		const linked = this.app.metadataCache.getFirstLinkpathDest(path.replace(/\.md$/, ""), "");
 		if (linked) return linked;
 		throw new Error(`No note at ${path}.`);
+	}
+
+	private async search(query: string, folder: string | undefined, limit: number | undefined): Promise<Record<string, unknown>> {
+		if (!query.trim()) throw new Error("Give some words to search for.");
+		const hitLimit = Math.min(Math.max(1, Math.round(limit ?? DEFAULT_SEARCH_HITS)), MAX_SEARCH_HITS);
+		const { hits, related } = await this.vaultSearch.search(query, { limit: hitLimit, folder });
+		return { hits, related };
 	}
 
 	private noteInfo(file: TFile): Record<string, unknown> {

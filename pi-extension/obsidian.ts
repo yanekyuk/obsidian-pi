@@ -1,6 +1,6 @@
-// Tools that give pi what only the running Obsidian app knows: the link graph and metadata
-// cache, safe property edits, the command palette. Part of the Pi Harness plugin, which loads
-// this file with `pi -e` when "Let pi use Obsidian" is switched on.
+// Tools that give pi what only the running Obsidian app knows: ranked search kept current by the
+// app, the link graph and metadata cache, safe property edits, the command palette. Part of the
+// Pi Harness plugin, which loads this file with `pi -e` when "Let pi use Obsidian" is switched on.
 //
 // Like browser.ts, each call crosses from the pi process to Obsidian on the one channel an
 // extension and an RPC host already share: a dialog request with the title below, which the
@@ -10,8 +10,18 @@ import { Type } from "typebox";
 
 const CHANNEL = "pi-harness:obsidian";
 
+interface SearchHit {
+	path: string;
+	headings: string[];
+	startLine: number;
+	endLine: number;
+	snippet: string;
+}
+
 interface Reply {
 	error?: string;
+	hits?: SearchHit[];
+	related?: { path: string; linkedHits: number }[];
 	path?: string;
 	frontmatter?: Record<string, unknown>;
 	aliases?: string[];
@@ -42,7 +52,41 @@ const text = (value: string) => ({ content: [{ type: "text" as const, text: valu
 const list = (title: string, items: string[]) => (items.length ? `${title}:\n${items.map((item) => `- ${item}`).join("\n")}` : `${title}: none`);
 const pathParam = (what: string) => Type.Optional(Type.String({ description: `Vault path of the ${what}, such as "Folder/Note.md"; a note name works too. Default: the note the user has open.` }));
 
+function describeHits(query: string, hits: SearchHit[], related: { path: string; linkedHits: number }[]): string {
+	if (!hits.length) return `No notes match "${query}". Try other words, fewer words, or grep for an exact phrase.`;
+	const rows = hits.map((hit, i) => {
+		const where = [hit.path, ...hit.headings].join(" › ");
+		return `${i + 1}. ${where} (lines ${hit.startLine}–${hit.endLine})\n   ${hit.snippet}`;
+	});
+	const suggestions = related.length ? `\n\nLinked with several of these results: ${related.map((r) => `${r.path} (${r.linkedHits})`).join(", ")}` : "";
+	return rows.join("\n") + suggestions;
+}
+
 export default function (pi: ExtensionAPI) {
+	pi.registerTool({
+		name: "obsidian_search",
+		label: "Search notes",
+		description:
+			"Search the vault's notes by words and get the best-matching sections, ranked: the note, the headings the section sits under, its line range and a snippet. Matches in note names, aliases, tags and headings count most; a word also matches longer words that start with it; case and accents are ignored (uzum finds Üzüm), so there is no need to search again without them. Notes that link to each other among the results rank higher, and notes linked with several results are suggested. Always reflects the notes as they are now.",
+		promptSnippet: "Ranked search of the vault's notes, section by section",
+		promptGuidelines: [
+			"Use obsidian_search to find notes about a topic, then read only the line ranges it returns (read with offset and limit) instead of whole notes.",
+			"To find or search notes, call obsidian_search directly: it replaces the search of the obsidian-cli skill, so don't load that skill for searching.",
+			"obsidian_search matches words, not meaning: when it finds little, search again with synonyms or related terms. Use grep for exact phrases or patterns.",
+		],
+		parameters: Type.Object({
+			query: Type.String({ description: "Words to look for, such as \"quarterly planning budget\". Order and punctuation don't matter." }),
+			folder: Type.Optional(Type.String({ description: "Only search notes in this folder and below it, such as \"Projects\"." })),
+			limit: Type.Optional(Type.Number({ description: "How many sections to return, 1 to 20. Default 8." })),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const r = await ask(ctx, { action: "search", query: params.query, folder: params.folder, limit: params.limit });
+			const hits = r.hits ?? [];
+			const related = r.related ?? [];
+			return { content: [{ type: "text" as const, text: describeHits(params.query, hits, related) }], details: { hits, related } };
+		},
+	});
+
 	pi.registerTool({
 		name: "obsidian_note_info",
 		label: "Note info",

@@ -41,7 +41,9 @@ export { snapshotBefore, snapshotAfter, unchangedSince } from ${JSON.stringify(j
 export { transcriptMarkdown } from ${JSON.stringify(join(root, "src/exportNote.ts"))};
 export { resolveLinked, sessionDirs } from ${JSON.stringify(join(root, "src/noteLink.ts"))};
 export { entryIdOf } from ${JSON.stringify(join(root, "src/view/editMessage.ts"))};
-export { rewordMessage, withContext } from ${JSON.stringify(join(root, "src/prompt.ts"))};`,
+export { rewordMessage, withContext } from ${JSON.stringify(join(root, "src/prompt.ts"))};
+export { SearchIndex } from ${JSON.stringify(join(root, "src/search/SearchIndex.ts"))};
+export { default as trimToolOutput } from ${JSON.stringify(join(root, "pi-extension/trim-tool-output.ts"))};`,
 );
 // sessions.ts reaches prompt.ts, which imports the Obsidian API; outside the app a stub will do.
 const obsidianStub = {
@@ -55,7 +57,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, rewordMessage, withContext } =
+const { PiRpcClient, Requirements, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, rewordMessage, withContext, SearchIndex, trimToolOutput } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -237,6 +239,95 @@ const check = (ok, label, detail = "") => {
 	check(!commandAllowed("", "editor:toggle-source") && !commandAllowed("  \n# editor:*\n", "editor:toggle-source"), "commands: an empty list (or only comments) allows nothing");
 	check(commandAllowed("*", "anything:at-all") && commandAllowed("editor:*\napp:reload", "app:reload") && commandAllowed("editor:*", "Editor:Toggle-Source"), "commands: * matches all, a prefix glob its ids, case ignored");
 	check(!commandAllowed("editor:*", "workspace:split") && !commandAllowed("editor:toggle", "editor:toggle-source") && !commandAllowed("a.b", "aXb"), "commands: no partial or prefix match without *, and a dot is a dot");
+}
+
+// ---- obsidian_search: ranked sections from the note index
+{
+	// A note the way VaultSearch hands it over: headings found by their line, the body after the properties.
+	const note = (path, text, extra = {}) => {
+		const headings = [...text.matchAll(/^(#+) (.*)$/gm)].map((m) => ({ level: m[1].length, heading: m[2], offset: m.index }));
+		const bodyStart = text.startsWith("---\n") ? text.indexOf("\n---\n", 4) + 5 : 0;
+		return { path, names: [path.split("/").pop().replace(/\.md$/, "")], tags: [], text, bodyStart, headings, ...extra };
+	};
+	const index = new SearchIndex();
+	index.put(note("Projects/Budget.md", "---\nsecretword: yes\n---\n# Budget\n\nWhat this is for.\n\n## Quarterly planning\n\nWe plan the quarterly budget here.\nTwo lines of it.\n\n## Travel\n\nFlights and hotels.\n"));
+	index.put(note("Journal/2026-09-01.md", "Walked the dog. Thought about the budget for a while, then about travel.\n"));
+	index.put(note("Areas/Trips.md", "Where we went.\n", { names: ["Trips", "Travel"] }));
+	const search = (query, options = {}, links = {}) => index.search(query, { limit: 8, ...options }, links);
+
+	const quarterly = search("quarterly budget").hits;
+	check(quarterly[0]?.path === "Projects/Budget.md" && quarterly[0].headings.join(" > ") === "Budget > Quarterly planning", "search: the section matching every word comes first, with the headings above it", JSON.stringify(quarterly[0]));
+	check(quarterly[0].startLine === 8 && quarterly[0].endLine === 11, "search: a hit gives the lines to read for its section, counted in the whole file (properties included)", `${quarterly[0].startLine}-${quarterly[0].endLine}`);
+	check(quarterly[0].snippet.includes("quarterly budget"), "search: the snippet shows where the words are", quarterly[0].snippet);
+	check(search("plann").hits[0]?.headings.at(-1) === "Quarterly planning", "search: a word also finds longer words that start with it");
+	const travel = search("travel").hits.map((h) => h.path);
+	check(travel.indexOf("Areas/Trips.md") >= 0 && travel.indexOf("Areas/Trips.md") < travel.indexOf("Journal/2026-09-01.md"), "search: a match in a note's name or alias outranks one in running text", travel.join());
+	check(search("secretword").hits.length === 0, "search: the properties block is not searched as text");
+	check(search("budget", { folder: "/Journal/" }).hits.every((h) => h.path.startsWith("Journal/")) && search("budget", { folder: "Journal" }).hits.length === 1, "search: a folder narrows the search to notes below it");
+	check(search("  ,. ").hits.length === 0, "search: no words, no hits");
+
+	const accents = new SearchIndex();
+	accents.put(note("Recipes/\u00dcz\u00fcm re\u00e7eli.md", "Grape jam, the slow way.\n"));
+	accents.put(note("Journal/Monday.md", "Bought uzum at the market.\n"));
+	accents.put(note("Journal/Tuesday.md", "\u0130\u0130 \u00df\u00df \ud83d\ude00 \u00d6\u011fretmen said \u00dcZ\u00dcM would come with the I\u015eIK project.\n"));
+	const paths = (query) => accents.search(query, { limit: 8 }, {}).hits.map((h) => h.path).sort().join();
+	const all = "Journal/Monday.md,Journal/Tuesday.md,Recipes/\u00dcz\u00fcm re\u00e7eli.md";
+	check(paths("\u00dcz\u00fcm") === all && paths("uzum") === all, "search: accents and case don't matter, either way round", paths("uzum"));
+	check(paths("\u0131\u015f\u0131k") === "Journal/Tuesday.md" && paths("isik") === "Journal/Tuesday.md", "search: Turkish dotless and dotted i match plain i");
+	const tuesday = accents.search("uzum", { limit: 8 }, {}).hits.find((h) => h.path === "Journal/Tuesday.md");
+	check(tuesday?.snippet.includes("said \u00dcZ\u00dcM would"), "search: the snippet shows the words as written, even after characters that fold oddly", tuesday?.snippet);
+
+	index.put(note("Journal/2026-09-01.md", "Nothing about money today.\n"));
+	index.remove("Projects/Budget.md");
+	check(search("budget").hits.length === 0, "search: a changed or removed note is found only as it is now");
+
+	const repeated = Array.from({ length: 5 }, (_, i) => `## Part ${i}\n\nzebra notes ${i}\n`).join("\n");
+	index.put(note("Zoo.md", repeated));
+	index.put(note("Other.md", "A zebra once.\n"));
+	check(search("zebra").hits.filter((h) => h.path === "Zoo.md").length === 2 && search("zebra").hits.some((h) => h.path === "Other.md"), "search: at most two sections of one note, so others get a look in");
+
+	const long = Array.from({ length: 60 }, (_, i) => `Paragraph ${i} of ordinary words about nothing in particular.`).join("\n\n") + "\n\nThe giraffe comes last.\n";
+	index.put(note("Long.md", long));
+	const giraffe = search("giraffe").hits[0];
+	check(giraffe?.path === "Long.md" && giraffe.startLine > 1 && giraffe.endLine === long.trimEnd().split("\n").length && giraffe.endLine - giraffe.startLine < 60, "search: a long section is cut into parts, and a hit points at the part with the word", JSON.stringify(giraffe));
+
+	index.put(note("Ideas/A.md", "compost heap ideas\n"));
+	index.put(note("Ideas/B.md", "compost heap ideas\n"));
+	index.put(note("Ideas/C.md", "compost heap ideas\n"));
+	const links = { "Ideas/A.md": { "Ideas/C.md": 1, "Garden.md": 1 }, "Ideas/B.md": { "Garden.md": 2 }, "Garden.md": { "Ideas/C.md": 1 }, "Ideas/C.md": { "photo.png": 1 } };
+	const compost = search("compost heap", {}, links);
+	check(compost.hits[0]?.path !== "Ideas/B.md" && compost.hits.at(-1)?.path === "Ideas/B.md", "search: among equal matches, notes linked with the other results rank higher", compost.hits.map((h) => h.path).join());
+	check(compost.related.length === 1 && compost.related[0].path === "Garden.md" && compost.related[0].linkedHits === 3, "search: a note linked with several results, either way, is suggested; attachments aren't", JSON.stringify(compost.related));
+}
+
+// ---- trimming old tool output before each model call
+{
+	let onContext;
+	trimToolOutput({ on: (event, handler) => event === "context" && (onContext = handler) });
+	const big = "x".repeat(5000);
+	// Each turn: the user asks, pi reads a note (big) and lists a folder (small), then answers.
+	const turn = (n) => [
+		{ role: "user", content: `question ${n}`, timestamp: n },
+		{ role: "assistant", content: [{ type: "toolCall", id: `r${n}`, name: "read", arguments: { path: `note-${n}.md`, limit: 400 } }, { type: "toolCall", id: `l${n}`, name: "ls", arguments: {} }], timestamp: n },
+		{ role: "toolResult", toolCallId: `r${n}`, toolName: "read", content: [{ type: "text", text: big }], isError: false, timestamp: n },
+		{ role: "toolResult", toolCallId: `l${n}`, toolName: "ls", content: [{ type: "text", text: "a.md" }], isError: false, timestamp: n },
+		{ role: "assistant", content: [{ type: "text", text: `answer ${n}` }], timestamp: n },
+	];
+	const conversation = (turns) => Array.from({ length: turns }, (_, i) => turn(i + 1)).flat();
+	const trimmedReads = (messages) => messages.filter((m) => m.role === "toolResult" && m.toolName === "read" && m.content[0].text !== big).length;
+
+	check(onContext({ type: "context", messages: conversation(5) }) === undefined, "trim: a short conversation goes out as it is");
+	const six = conversation(6);
+	const sent = onContext({ type: "context", messages: six }).messages;
+	const standIn = sent.find((m) => m.toolCallId === "r1").content[0].text;
+	check(trimmedReads(sent) === 3 && sent.find((m) => m.toolCallId === "r4").content[0].text === big, "trim: big output of older turns is trimmed, the latest three turns go whole");
+	check(standIn.includes('read(path="note-1.md", limit="400")') && standIn.includes("5000 characters"), "trim: the stand-in names the call and its size, so pi can run it again", standIn);
+	check(sent.find((m) => m.toolCallId === "l1").content[0].text === "a.md" && six.find((m) => m.toolCallId === "r1").content[0].text === big, "trim: small output stays, and the session's own messages are left untouched");
+	const counts = [7, 8, 9].map((turns) => trimmedReads(onContext({ type: "context", messages: conversation(turns) }).messages));
+	check(counts.join() === "3,3,6", "trim: the trimmed part grows in steps of three turns, so the cached prompt changes rarely", counts.join());
+	const withImage = conversation(6);
+	withImage[2] = { ...withImage[2], content: [{ type: "image", data: "AAAA", mimeType: "image/png" }] };
+	check(onContext({ type: "context", messages: withImage }).messages[2].content[0].text.includes("1 image"), "trim: an old screenshot is trimmed whatever its size");
 }
 
 // ---- undo for pi's edits: what the panel keeps of a file around an edit or write
@@ -472,12 +563,12 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 	let isolatedExit = null;
 	isolated.onExit((info) => (isolatedExit = info));
 	// With the plugin's own extensions loaded the way the panel loads them.
-	const extensions = ["browser", "obsidian"].flatMap((name) => ["-e", join(root, "pi-extension", `${name}.ts`)]);
+	const extensions = ["browser", "obsidian", "trim-tool-output"].flatMap((name) => ["-e", join(root, "pi-extension", `${name}.ts`)]);
 	await isolated.start({ binary: "pi", args: ["--no-session", "--no-skills", ...extensions], cwd: work, env: { ...env, PI_CODING_AGENT_DIR: isolatedDir } });
 	const theirs = await isolated.getCommands();
 	const usable = await isolated.getAvailableModels();
 	await isolated.stop();
-	check(isolatedExit && !/error|failed/i.test(isolatedExit.stderr), "the plugin's browser and obsidian extensions load without complaint", isolatedExit?.stderr.slice(0, 200));
+	check(isolatedExit && !/error|failed/i.test(isolatedExit.stderr), "the plugin's browser, obsidian and trim-tool-output extensions load without complaint", isolatedExit?.stderr.slice(0, 200));
 	check(usable.length > 0, "isolated pi: the linked credentials give it models to use", `${usable.length} models`);
 	// pi ships a few extensions of its own inline (llama.cpp); those aren't the user's.
 	const builtIn = (c) => (c.sourceInfo?.path ?? "").startsWith("<inline:");

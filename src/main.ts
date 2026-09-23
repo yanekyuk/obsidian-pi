@@ -7,6 +7,7 @@ import { loadsAllSkills, readPackageEntries, sourceOf } from "./packages";
 import { MCP_ADAPTER, Requirements } from "./requirements";
 import { BrowserControl } from "./browser";
 import { ObsidianControl } from "./obsidianControl";
+import { VaultSearch } from "./search/VaultSearch";
 import { extractBundledFiles } from "./bundled";
 import { StatusBar } from "./statusBar";
 import { linkedSession, resolveLinked, sessionDirs } from "./noteLink";
@@ -25,7 +26,8 @@ const PI_ICON = `<path d="M18 30h64M38 30v46M64 30v34c0 8 4 12 12 12" fill="none
 export default class PiAgentPlugin extends Plugin {
 	settings: PiAgentSettings = DEFAULT_SETTINGS;
 	browser = new BrowserControl(this.app);
-	obsidian = new ObsidianControl(this.app, () => this.settings.commandAllowlist);
+	vaultSearch = new VaultSearch(this.app);
+	obsidian = new ObsidianControl(this.app, () => this.settings.commandAllowlist, this.vaultSearch);
 	statusBar!: StatusBar;
 
 	requirements = new Requirements({ piCommand: () => this.piCommand() });
@@ -45,6 +47,7 @@ export default class PiAgentPlugin extends Plugin {
 		// Before any chat starts pi, whose PATH includes the launcher.
 		if (this.manifest.dir) await extractBundledFiles(join(this.vaultPath, this.manifest.dir)).catch((err) => console.warn("[pi-harness] couldn't write the bundled launcher", err));
 
+		this.addChild(this.vaultSearch);
 		this.registerView(VIEW_TYPE_PI, (leaf) => new ChatView(leaf, this));
 		this.app.workspace.onLayoutReady(() => void this.adoptLegacyPanels());
 		this.registerHoverLinkSource(VIEW_TYPE_PI, { display: "Pi Harness", defaultMod: true });
@@ -339,6 +342,7 @@ export default class PiAgentPlugin extends Plugin {
 		// pi's browser_* tools for Obsidian's web viewer; the file is unpacked next to main.js (see bundled.ts).
 		if (s.browserControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "browser.ts"));
 		if (s.obsidianControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "obsidian.ts"));
+		if (s.trimToolOutput && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "trim-tool-output.ts"));
 
 		// Naive split is enough for flags; quote-aware parsing isn't worth it here.
 		args.push(...s.extraArgs.split(/\s+/).filter(Boolean));
