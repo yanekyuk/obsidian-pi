@@ -8,7 +8,7 @@ import { OBSIDIAN_CHANNEL } from "../obsidianControl";
 import type PiAgentPlugin from "../main";
 import { probeMcp, unusableMcpServers, vaultMcpServers } from "../mcp";
 import { readActiveContext, splitContext, withContext } from "../prompt";
-import { OBSIDIAN_SKILLS, SKILLS_PACKAGE } from "../requirements";
+import { findRequired, manualInstallCommands, OBSIDIAN_SKILLS, SKILLS_PACKAGE } from "../requirements";
 import { PiRpcClient } from "../rpc/PiRpcClient";
 import type { AgentMessage, AssistantMessageEvent, ExtensionUiRequest, ImageContent, RpcEvent, SessionState, SlashCommand, ToolCallContent } from "../rpc/types";
 import { contentText } from "../sessions";
@@ -128,7 +128,7 @@ export class ChatSession {
 	private widgetsBelowEl!: HTMLElement;
 	private activityEl!: HTMLElement;
 	private mcpWarningEl!: HTMLElement;
-	private offerEl!: HTMLElement;
+	private prerequisitesEl!: HTMLElement;
 	private mcpCheckedAt = 0;
 	// Server names whose "reconnected" notice is ours to swallow, because the panel asked for it.
 	private quietReconnects = new Set<string>();
@@ -282,7 +282,7 @@ export class ChatSession {
 		this.mcpWarningEl = dock.createDiv({ cls: "pi-warning", attr: { "aria-label": "Click to check again" } });
 		this.mcpWarningEl.hide();
 		this.mcpWarningEl.addEventListener("click", () => void this.checkMcp(true));
-		this.offerEl = dock.createDiv({ cls: "pi-offer" });
+		this.prerequisitesEl = dock.createDiv({ cls: "pi-prerequisites" });
 		// Same shape as a "Thinking…" line in the transcript above it: an icon, then the words.
 		const activity = dock.createDiv({ cls: "pi-activity" });
 		setIcon(activity.createSpan({ cls: "pi-icon" }), "loader");
@@ -467,50 +467,43 @@ export class ChatSession {
 		return this.suggest.commands.some((c) => c.source === "skill" && OBSIDIAN_SKILLS.includes(c.name.replace(/^skill:/, "")));
 	}
 
-	// The Obsidian skills come from their author's repository, through pi. Whether they are
-	// needed shows only now that pi has listed its skills: ones in the vault's .pi/skills count.
-	private async ensureSkills(): Promise<void> {
-		if (this.hasObsidianSkills || !this.plugin.settings.manageExtensions) return;
-		// Installed but not loaded means the user switched the package off; that is not "missing".
-		const installed = await this.plugin.requirements.installed().catch(() => []);
-		if (installed.some((pkg) => basename(pkg.path) === SKILLS_PACKAGE.name)) return;
-		const installedNow = await this.plugin.requirements.installSkills((status) => this.setActivity(status));
-		this.setActivity(this.busy ? "Working…" : null);
-		// One reload, by whichever tab got here first while pi was at rest; the others pick them up on their next start.
-		if (installedNow && !this.hasObsidianSkills && this.replaceable && this.client.running) await this.restart();
-	}
+	// Package state is inspected only after Pi has reported its loaded skills. Missing items
+	// are guidance, not a startup failure: Pi keeps running with fewer panel integrations.
+	private async showMissingPrerequisites(): Promise<void> {
+		this.prerequisitesEl.empty();
+		const installed = await this.plugin.requirements.installed().catch(() => null);
+		if (!installed) return;
 
-	// Installing extensions means downloading code from npm and running it inside pi, so it is
-	// the user's call. Asked once, in the tab on screen; the settings tab has the same switches.
-	private async offerExtensions(): Promise<void> {
-		const { settings } = this.plugin;
-		if (settings.manageExtensions || settings.extensionsOfferAnswered || !this.host.isShowing(this)) return;
-		const missing = [...(await this.plugin.requirements.status().catch(() => new Map<string, null>()))].filter(([, pkg]) => pkg === null).map(([name]) => name);
-		if (!this.hasObsidianSkills) missing.push(`${SKILLS_PACKAGE.name} (Steph Ango's skills for notes, Bases and Canvas, from ${SKILLS_PACKAGE.source.replace("git:", "")})`);
-		if (!missing.length || settings.extensionsOfferAnswered) return;
+		const missingPackages = [...findRequired(installed)].filter(([, pkg]) => pkg === null).map(([name]) => name);
+		const skillsMissing = !this.hasObsidianSkills;
+		const skillsPackageInstalled = installed.some((pkg) => basename(pkg.path) === SKILLS_PACKAGE.name);
+		if (!missingPackages.length && !skillsMissing) return;
 
-		this.offerEl.empty();
-		const card = this.offerEl.createDiv({ cls: "pi-side-card" });
+		const card = this.prerequisitesEl.createDiv({ cls: "pi-side-card" });
 		const head = card.createDiv({ cls: "pi-dialog-head" });
 		setIcon(head.createSpan({ cls: "pi-icon" }), "package");
-		head.createSpan({ cls: "pi-dialog-header", text: "Extensions" });
-		card.createDiv({
-			text: `The panel is built around a few pi extensions and skills (task list, questions, web tools, Obsidian know-how), and ${missing.length === 1 ? "one is" : `${missing.length} are`} not installed: ${missing.join(", ")}. Installing runs "pi install", which downloads them from npm and GitHub into pi's own package folder, where a pi in your terminal uses them too. pi works without them, with fewer features.`,
-		});
-		const update = card.createEl("label", { cls: "pi-offer-check" });
-		const updateBox = update.createEl("input", { type: "checkbox" });
-		update.createSpan({ text: "Also keep pi and its packages up to date (runs \"pi update --all\" once a day)" });
+		head.createSpan({ cls: "pi-dialog-header", text: "Manual setup" });
+		head.createSpan({ cls: "pi-side-note", text: "Pi is still available" });
+		const close = head.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Dismiss" } });
+		setIcon(close, "x");
+		close.addEventListener("click", () => this.prerequisitesEl.empty());
+
+		if (missingPackages.length) card.createDiv({ text: `Recommended Pi packages are missing: ${missingPackages.join(", ")}.` });
+		if (skillsMissing) {
+			card.createDiv({
+				text: skillsPackageInstalled
+					? "The Obsidian skills package is installed but its skills are not loaded. Enable the package in Pi Harness settings, or check its Pi filters."
+					: "Obsidian skills for notes, Bases, and Canvas are not loaded.",
+			});
+		}
+
+		const commands = manualInstallCommands(missingPackages, skillsMissing && !skillsPackageInstalled);
+		if (commands.length) {
+			card.createDiv({ text: "Pi Harness never installs or updates packages. Open a terminal in this vault's root and run:" });
+			card.createEl("pre", { cls: "pi-prerequisite-commands", text: commands.join("\n") });
+		}
 		const actions = card.createDiv({ cls: "pi-dialog-actions" });
-		const answer = async (install: boolean) => {
-			settings.extensionsOfferAnswered = true;
-			settings.manageExtensions = install;
-			if (install) settings.autoUpdate = updateBox.checked;
-			await this.plugin.saveSettings();
-			this.offerEl.empty();
-			if (install) await this.reload();
-		};
-		actions.createEl("button", { text: "Install", cls: "mod-cta" }).addEventListener("click", () => void answer(true));
-		actions.createEl("button", { text: "Not now" }).addEventListener("click", () => void answer(false));
+		actions.createEl("button", { text: "Open settings" }).addEventListener("click", () => this.plugin.openSettings());
 		this.keepScrolled();
 	}
 
@@ -557,8 +550,6 @@ export class ChatSession {
 		this.bannerEl.hide();
 		this.setActivity("Starting pi…");
 		try {
-			await this.plugin.requirements.ensure((status) => this.setActivity(status));
-			this.setActivity("Starting pi…");
 			await this.client.start(await this.plugin.buildSpawnOptions(session ?? this.resumeTarget()));
 			await this.syncSession();
 			const fromPi = await this.client.getCommands();
@@ -566,8 +557,7 @@ export class ChatSession {
 			this.renderEmptyState();
 			void this.checkMcp(true);
 			void this.connectMcp();
-			void this.offerExtensions();
-			void this.ensureSkills();
+			void this.showMissingPrerequisites();
 		} catch (err) {
 			const missing = (err as NodeJS.ErrnoException).code === "ENOENT";
 			this.failed = true;

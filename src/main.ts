@@ -20,7 +20,6 @@ import { panelsIn, type SavedTab } from "./view/savedTabs";
 
 const MAX_SESSIONS_WITH_HIDDEN_TODOS = 30;
 const LEGACY_VIEW_TYPE = "pi-agent-chat";
-const UPDATE_CHECK_MS = 20 * 60 * 1000;
 const PI_ICON = `<path d="M18 30h64M38 30v46M64 30v34c0 8 4 12 12 12" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`;
 
 export default class PiAgentPlugin extends Plugin {
@@ -29,18 +28,7 @@ export default class PiAgentPlugin extends Plugin {
 	obsidian = new ObsidianControl(this.app, () => this.settings.commandAllowlist);
 	statusBar!: StatusBar;
 
-	requirements = new Requirements({
-		piCommand: () => this.piCommand(),
-		enabled: () => this.settings.manageExtensions,
-		autoUpdate: () => this.settings.autoUpdate,
-		busy: () => this.chatViews().some((view) => view.isBusy),
-		lastUpdate: () => this.settings.lastExtensionUpdate,
-		setLastUpdate: async (time) => {
-			this.settings.lastExtensionUpdate = time;
-			await this.saveSettings();
-		},
-		notify: (message) => new Notice(message, 8000),
-	});
+	requirements = new Requirements({ piCommand: () => this.piCommand() });
 
 	get vaultPath(): string {
 		const adapter = this.app.vault.adapter;
@@ -49,8 +37,9 @@ export default class PiAgentPlugin extends Plugin {
 	}
 
 	async onload(): Promise<void> {
-		const saved = (await this.loadData()) as Partial<PiAgentSettings> | null;
-		this.settings = { ...DEFAULT_SETTINGS, ...saved, inherit: { ...DEFAULT_INHERITANCE, ...saved?.inherit } };
+		const loaded = ((await this.loadData()) ?? {}) as Record<string, unknown>;
+		const currentSettings = Object.fromEntries(Object.keys(DEFAULT_SETTINGS).filter((key) => key in loaded).map((key) => [key, loaded[key]])) as Partial<PiAgentSettings>;
+		this.settings = { ...DEFAULT_SETTINGS, ...currentSettings, inherit: { ...DEFAULT_INHERITANCE, ...currentSettings.inherit } };
 		addIcon("pi", PI_ICON);
 		void resolveEnv(); // warm the shell PATH lookup before the first spawn
 		// Before any chat starts pi, whose PATH includes the launcher.
@@ -67,12 +56,6 @@ export default class PiAgentPlugin extends Plugin {
 		// them; &note=Folder/Note opens pi for that note; &session=<file name> opens that session.
 		this.registerObsidianProtocolHandler("pi-harness", (params) => void this.handleUri(params));
 
-		// Well after startup, so it never competes with Obsidian loading or pi's first start. After
-		// that it keeps asking: the update itself decides whether a day has passed and pi is idle.
-		this.registerInterval(window.setTimeout(() => void this.updateExtensions(false), 60_000));
-		this.registerInterval(window.setInterval(() => void this.updateExtensions(false), UPDATE_CHECK_MS));
-
-		this.addCommand({ id: "update-extensions", name: "Update pi and its packages", callback: () => void this.updateExtensions(true) });
 		this.addCommand({
 			id: "advisor",
 			name: "Set advisor model",
@@ -133,19 +116,6 @@ export default class PiAgentPlugin extends Plugin {
 		});
 	}
 
-	async updateExtensions(force: boolean): Promise<void> {
-		try {
-			if (force) new Notice("Updating pi and its packages…");
-			const changed = await this.requirements.update(force);
-			if (changed.length) {
-				// Tabs with pi at work keep the old code until they are reloaded by hand.
-				const notice = new Notice(`Updated ${changed.join(", ")}. Click to reload pi.`, 15000);
-				notice.noticeEl.addEventListener("click", () => this.chatViews().forEach((view) => void view.reloadIdleTabs()));
-			} else if (force) new Notice("pi and its packages are up to date.");
-		} catch (err) {
-			if (force) new Notice(`Couldn't update pi: ${(err as Error).message}`, 8000);
-		}
-	}
 
 	hiddenTodosFor(sessionFile: string | null): string[] {
 		return (sessionFile && this.settings.hiddenTodos[sessionFile]) || [];
@@ -231,7 +201,7 @@ export default class PiAgentPlugin extends Plugin {
 		return join(this.vaultPath, ".pi", "settings.json");
 	}
 
-	// The environment every pi the plugin starts runs in: the chat, side questions, installs and updates.
+	// The environment every pi process the plugin starts uses: chats, side questions, and package inspection.
 	private async piEnv(): Promise<NodeJS.ProcessEnv> {
 		const env = { ...(await resolveEnv()) };
 		// The Obsidian CLI skill calls `obsidian`. The plugin's launcher goes last on the PATH, so

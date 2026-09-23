@@ -1,21 +1,28 @@
 import { execFile } from "child_process";
-import { readFileSync } from "fs";
-import { basename, join } from "path";
+import { basename } from "path";
 
-// The pi extensions the panel is built around. The plugin installs the missing ones through
-// pi's own package manager, into whichever config folder the panel's pi uses (see agentDir.ts).
-// The MCP adapter is what makes pi read a vault's .mcp.json and gives it the /mcp command.
+// The pi packages the panel knows how to present. A local checkout or git fork with the
+// same folder name satisfies a requirement; Pi Harness only inspects packages and never
+// installs, removes, or updates them.
 export const MCP_ADAPTER = "pi-mcp-adapter";
 export const REQUIRED_PACKAGES = ["rpiv-advisor", "rpiv-args", "rpiv-ask-user-question", "rpiv-btw", "rpiv-todo", "rpiv-web-tools", MCP_ADAPTER] as const;
-const SCOPE = "@juicesharp";
-const sourceOf = (name: string) => (name === MCP_ADAPTER ? `npm:${name}` : `npm:${SCOPE}/${name}`);
+export type RequiredPackageName = (typeof REQUIRED_PACKAGES)[number];
 
-// Steph Ango's Obsidian skills. They are his, so the plugin doesn't carry a copy: pi fetches
-// them from his repository, and `pi update` keeps them current like any other package.
-export const SKILLS_PACKAGE = { name: "obsidian-skills", source: "git:github.com/kepano/obsidian-skills" };
+const SCOPE = "@juicesharp";
+export const requiredPackageSource = (name: RequiredPackageName): string => (name === MCP_ADAPTER ? `npm:${name}` : `npm:${SCOPE}/${name}`);
+
+// Steph Ango's Obsidian skills remain in their own repository. Users install and update
+// them outside Obsidian; the plugin only checks whether Pi has loaded any of them.
+export const SKILLS_PACKAGE = { name: "obsidian-skills", source: "git:github.com/kepano/obsidian-skills" } as const;
 export const OBSIDIAN_SKILLS = ["obsidian-markdown", "obsidian-bases", "json-canvas", "obsidian-cli", "defuddle"];
-const UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Local installs work with Pi Harness's isolated profile and its shared profile alike.
+// These commands must be run by the user in a terminal whose working directory is the vault.
+export function manualInstallCommands(missingPackages: readonly RequiredPackageName[], includeObsidianSkills: boolean): string[] {
+	const sources = missingPackages.map(requiredPackageSource);
+	if (includeObsidianSkills) sources.push(SKILLS_PACKAGE.source);
+	return sources.map((source) => `pi install -l ${source}`);
+}
 
 export interface InstalledPackage {
 	source: string;
@@ -40,158 +47,53 @@ export function parsePiList(output: string): InstalledPackage[] {
 }
 
 // By folder name, not by source: a package installed from a local checkout or a git
-// fork satisfies the requirement just as well, and installing the npm one on top of it
-// would load the extension twice.
-export function findRequired(installed: InstalledPackage[]): Map<string, InstalledPackage | null> {
-	return new Map(REQUIRED_PACKAGES.map((name) => [name, installed.find((p) => basename(p.path) === name) ?? null]));
-}
-
-// What tells one state of an installed package from the next: its npm version, or for a git
-// checkout without one (the Obsidian skills are plain folders) the commit it is on.
-export function versionAt(path: string): string | null {
-	try {
-		const version = (JSON.parse(readFileSync(join(path, "package.json"), "utf8")) as { version?: string }).version;
-		if (version) return version;
-	} catch {
-		// no package.json: fall through to git
-	}
-	try {
-		const head = readFileSync(join(path, ".git", "HEAD"), "utf8").trim();
-		const ref = head.match(/^ref: (.+)$/)?.[1];
-		if (!ref) return head.slice(0, 7);
-		try {
-			return readFileSync(join(path, ".git", ref), "utf8").trim().slice(0, 7);
-		} catch {
-			const packed = readFileSync(join(path, ".git", "packed-refs"), "utf8").match(new RegExp(`^([0-9a-f]{40}) ${ref}$`, "m"));
-			return packed ? packed[1].slice(0, 7) : null;
-		}
-	} catch {
-		return null;
-	}
+// fork satisfies the requirement just as well, and should not be reported as missing.
+export function findRequired(installed: InstalledPackage[]): Map<RequiredPackageName, InstalledPackage | null> {
+	return new Map(REQUIRED_PACKAGES.map((name) => [name, installed.find((pkg) => basename(pkg.path) === name) ?? null] as const));
 }
 
 export interface RequirementsHost {
 	piCommand(): Promise<{ binary: string; env: NodeJS.ProcessEnv; cwd: string }>;
-	enabled(): boolean;
-	autoUpdate(): boolean;
-	// pi is in the middle of something in one of the tabs.
-	busy(): boolean;
-	lastUpdate(): number;
-	setLastUpdate(time: number): Promise<void>;
-	notify(message: string): void;
 }
 
+const LIST_TIMEOUT_MS = 60_000;
+
+// Inspection boundary for Pi's package state. The only subprocess operation here is
+// `pi list`; package mutations belong to the user's terminal, outside Obsidian.
 export class Requirements {
-	private ensuring: Promise<void> | null = null;
-	private updating: Promise<string[]> | null = null;
-	private listed: Promise<InstalledPackage[]> | null = null;
-	private installingSkills: Promise<boolean> | null = null;
+	private listing: Promise<InstalledPackage[]> | null = null;
 
 	constructor(private host: RequirementsHost) {}
 
-	private async pi(args: string[]): Promise<string> {
+	// Concurrent tabs share one `pi list`, but a later check runs it again so packages the
+	// user installed outside Obsidian are visible without restarting Obsidian.
+	installed(): Promise<InstalledPackage[]> {
+		if (this.listing) return this.listing;
+		this.listing = this.listInstalled();
+		const current = this.listing;
+		void current.then(
+			() => {
+				if (this.listing === current) this.listing = null;
+			},
+			() => {
+				if (this.listing === current) this.listing = null;
+			},
+		);
+		return current;
+	}
+
+	async status(): Promise<Map<RequiredPackageName, InstalledPackage | null>> {
+		return findRequired(await this.installed());
+	}
+
+	private async listInstalled(): Promise<InstalledPackage[]> {
 		const { binary, env, cwd } = await this.host.piCommand();
-		return new Promise((resolve, reject) => {
-			execFile(binary, args, { env, cwd, timeout: INSTALL_TIMEOUT_MS, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+		const output = await new Promise<string>((resolve, reject) => {
+			execFile(binary, ["list"], { env, cwd, timeout: LIST_TIMEOUT_MS, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
 				if (err) reject(new Error((stderr || err.message).trim().split("\n").slice(-3).join("\n")));
 				else resolve(stdout);
 			});
 		});
-	}
-
-	// `pi list` takes a moment and every tab asks at start, so the answer is kept until something is installed or updated.
-	installed(): Promise<InstalledPackage[]> {
-		this.listed ??= this.pi(["list"]).then(parsePiList);
-		this.listed.catch(() => (this.listed = null));
-		return this.listed;
-	}
-
-	async status(): Promise<Map<string, InstalledPackage | null>> {
-		return findRequired(await this.installed());
-	}
-
-	// Installs whatever is missing. Runs once per Obsidian session however many chat tabs
-	// ask; a failure (offline, no npm) is reported and never keeps pi from starting.
-	ensure(onStatus: (text: string) => void): Promise<void> {
-		if (!this.host.enabled()) return Promise.resolve();
-		this.ensuring ??= (async () => {
-			try {
-				const missing = [...(await this.status())].filter(([, pkg]) => pkg === null).map(([name]) => name);
-				for (const name of missing) {
-					onStatus(`Installing ${name}…`);
-					await this.pi(["install", sourceOf(name)]);
-					this.listed = null;
-				}
-				if (missing.length) this.host.notify(`Pi Harness installed ${missing.join(", ")}.`);
-			} catch (err) {
-				this.ensuring = null; // let the next pi start try again
-				this.host.notify(`Pi Harness couldn't install its pi extensions: ${(err as Error).message}`);
-			}
-		})();
-		return this.ensuring;
-	}
-
-	// For the package list in the settings tab: what the user would type after `pi install` / `pi remove`.
-	// `local` means the vault's own .pi folder instead of the panel's config folder.
-	async install(source: string, local: boolean): Promise<void> {
-		await this.pi(["install", ...(local ? ["-l"] : []), source]);
-		this.listed = null;
-	}
-
-	async remove(source: string, local: boolean): Promise<void> {
-		await this.pi(["remove", ...(local ? ["-l"] : []), source]);
-		this.listed = null;
-	}
-
-	// Whether these are needed is only known once pi is up and says which skills it found: a vault
-	// may bring its own in .pi/skills, and those count. Resolves to true when they were installed
-	// just now, which the running pi only notices after a reload.
-	installSkills(onStatus: (text: string) => void): Promise<boolean> {
-		if (!this.host.enabled()) return Promise.resolve(false);
-		// Only the first caller hears "installed just now", so only one tab reloads for it, once.
-		if (this.installingSkills) return this.installingSkills.then(() => false);
-		this.installingSkills = (async () => {
-			try {
-				onStatus(`Installing ${SKILLS_PACKAGE.name}…`);
-				await this.pi(["install", SKILLS_PACKAGE.source]);
-				this.listed = null;
-				this.host.notify(`Pi Harness installed ${SKILLS_PACKAGE.name}.`);
-				return true;
-			} catch (err) {
-				this.host.notify(`Pi Harness couldn't install the Obsidian skills: ${(err as Error).message}`);
-				return false;
-			}
-		})();
-		return this.installingSkills;
-	}
-
-	// pi itself, then every installed package, by folder name.
-	private async versions(): Promise<Map<string, string>> {
-		const versions = new Map([["pi", (await this.pi(["--version"])).trim()]]);
-		for (const pkg of await this.installed()) {
-			const version = versionAt(pkg.path);
-			if (version) versions.set(basename(pkg.path), version);
-		}
-		return versions;
-	}
-
-	// `pi update --all`: pi and every installed package, the rpiv extensions and the Obsidian
-	// skills among them (a git package without a pinned ref is pulled), at most once a day unless forced.
-	// It replaces pi's files, so it waits for a moment when no tab has pi at work. Returns
-	// what changed; a running pi keeps the old code until it is reloaded.
-	async update(force = false): Promise<string[]> {
-		if (!force && (!this.host.autoUpdate() || this.host.busy() || Date.now() - this.host.lastUpdate() < UPDATE_INTERVAL_MS)) return [];
-		this.updating ??= (async () => {
-			try {
-				const before = await this.versions();
-				await this.pi(["update", "--all"]);
-				this.listed = null;
-				await this.host.setLastUpdate(Date.now());
-				return [...(await this.versions())].filter(([name, version]) => before.get(name) !== version).map(([name, version]) => `${name} ${version}`);
-			} finally {
-				this.updating = null;
-			}
-		})();
-		return this.updating;
+		return parsePiList(output);
 	}
 }

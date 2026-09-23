@@ -9,9 +9,9 @@ Desktop only: the plugin starts `pi` as a child process. Developed and used on m
 This plugin puts a coding agent in your vault. Read this first.
 
 - **pi acts without asking.** It can run shell commands and read, change or delete any file your user account can, in the vault and outside it. That is how pi works in a terminal too; the plugin adds no confirmation step. Text pi reads (a note, a web page it fetched) can contain instructions that steer it, so treat it like any other program you give your shell to. For a read-only agent, put `--tools read,grep,find,ls` in Settings → Extra arguments. Keep backups of your vault.
-- **Your notes leave your machine.** Whatever pi reads, plus the active note and selection when the note chip is on, is sent to the model provider you configured in pi. The plugin itself sends nothing anywhere and has no telemetry.
-- **Network use.** pi talks to your model provider and to whatever its tools reach (web search and fetch, MCP servers). The plugin makes two kinds of requests of its own: a local MCP `initialize` to the HTTP servers listed in the vault's `.mcp.json`, to warn you when one is down, and, only if you opt in, `pi install` / `pi update`, which download packages from npm and GitHub.
-- **Code from npm and GitHub, only if you say yes.** The panel works best with six third-party pi extensions and Steph Ango's Obsidian skills. The first time they are missing, the panel asks whether to install them; daily `pi update --all` is a separate switch that is off by default. Both are under Settings → Extensions.
+- **Your notes leave your machine.** Whatever pi reads, plus the active note and selection when the note chip is on, is sent to the model provider you configured in pi. Pi Harness has no telemetry and does not send note content independently of pi.
+- **Network use.** pi talks to your model provider and to whatever its tools reach (web search and fetch, MCP servers). The plugin also sends a local MCP `initialize` request to HTTP servers listed in the vault's `.mcp.json`, only to warn you when one is down.
+- **Third-party Pi packages are manual.** The panel works best with six extensions from rpiv, `pi-mcp-adapter`, and Steph Ango's Obsidian skills. Pi Harness reports when they are missing, but never installs, removes, or updates Pi or its packages. Review and manage them yourself in a terminal.
 - **The web viewer, only if you switch it on.** pi can then open, read and operate pages in Obsidian's web viewer, where you may be logged in to sites. See [Web viewer](#web-viewer).
 - **Files outside the vault.** The panel's pi keeps its config in `~/.pi/harness`, with links to your pi logins in `~/.pi/agent`. pi keeps sessions under `~/.pi/agent/sessions`; "Move to trash" in the session list moves such a file to the system trash. Choosing an advisor model writes `~/.config/rpiv-advisor/advisor.json`. To find `pi` when Obsidian was started from the Dock, the plugin asks your login shell for its `PATH`.
 
@@ -97,7 +97,7 @@ How it works, for these and the Obsidian tools above: each set is a small pi ext
 
 ## Separate from your terminal pi
 
-The panel's pi has a config folder of its own, `~/.pi/harness`, so what you set up for pi in the terminal stays out of your vault unless you want it there. The plugin installs what the panel needs (below) into that folder. What crosses over from `~/.pi/agent` is decided under **Settings → Inheritance**, one switch each:
+The panel's pi has a config folder of its own, `~/.pi/harness`, so what you set up for pi in the terminal stays out of your vault unless you want it there. Pi Harness does not populate or update that profile. What crosses over from `~/.pi/agent` is decided under **Settings → Inheritance**, one switch each:
 
 | Switch | Default | What it does |
 | --- | --- | --- |
@@ -115,7 +115,7 @@ The panel's pi has a config folder of its own, `~/.pi/harness`, so what you set 
 
 Switching something off removes the link the plugin made and never touches your own files. Packages you installed with `pi install` are not inherited one by one.
 
-**What the vault has in its own `.pi` folder is not inheritance and still loads**, once you have trusted the vault in pi. That is the place for anything you want in the panel but the plugin doesn't install, such as a login provider. Install it from Settings → Extensions → Packages ("In this vault's .pi"), or from the vault folder:
+**What the vault has in its own `.pi` folder is not inheritance and still loads**, once you have trusted the vault in pi. That is the place for anything you want in the panel regardless of which Pi profile it uses, such as a login provider. Install it yourself from a terminal opened in the vault folder:
 
 ```bash
 pi install -l npm:pi-claude-oauth-adapter
@@ -127,14 +127,28 @@ Turn **Keep the panel's pi separate** off to have the panel use `~/.pi/agent` as
 
 ## pi extensions the panel is built around
 
-The panel is built around six extensions from [rpiv](https://github.com/juicesharp/rpiv-mono). It also installs [pi-mcp-adapter](https://www.npmjs.com/package/pi-mcp-adapter), which is what makes pi read a vault's `.mcp.json` and provides `/mcp`. When some are missing, the panel asks once whether to install them. If you agree, the plugin checks `pi list` before pi starts and installs what is missing with `pi install npm:@juicesharp/<name>` (into the panel's own config folder, or `~/.pi/agent` when the separation is off). A copy installed from a local folder or git counts as installed. Without them pi still works; the panel just has less to show. If you also turn on **Keep pi up to date**, once a day the plugin runs `pi update --all`, which updates pi itself and every installed package, not only these six. It waits until pi is idle in every tab, because the update replaces pi's files. When something changed you get a toast listing the new versions; click it to reload pi in the idle tabs, or use `/reload` or the ↻ button later. A running pi keeps the old code until then. Both switches are under Settings → Extensions.
+The panel is built around six extensions from [rpiv](https://github.com/juicesharp/rpiv-mono). [pi-mcp-adapter](https://www.npmjs.com/package/pi-mcp-adapter) makes pi read a vault's `.mcp.json` and provides `/mcp`. Pi Harness runs `pi list` to identify missing packages, but it never installs, removes, or updates them. A copy installed from a local folder or git counts as installed. Without these packages pi still works; the panel just has fewer integrations.
 
-**Settings → Extensions → Packages** lists every package the panel's pi loads, from its own config folder and from the vault's `.pi` folder, the ones the plugin installed and the ones you added:
+For the full set of integrations, open a terminal in the vault root, review the sources, and run:
+
+```bash
+pi install -l npm:@juicesharp/rpiv-advisor
+pi install -l npm:@juicesharp/rpiv-args
+pi install -l npm:@juicesharp/rpiv-ask-user-question
+pi install -l npm:@juicesharp/rpiv-btw
+pi install -l npm:@juicesharp/rpiv-todo
+pi install -l npm:@juicesharp/rpiv-web-tools
+pi install -l npm:pi-mcp-adapter
+pi install -l git:github.com/kepano/obsidian-skills
+```
+
+These are vault-local installs, so they work whether Pi Harness uses `~/.pi/harness` or shares your terminal Pi profile. Manage updates yourself with Pi's CLI outside Obsidian, then reload pi in the panel with `/reload` or ↻.
+
+**Settings → Extensions → Packages** lists package entries from the panel's Pi profile and the vault's `.pi` folder:
 
 - A switch turns a package off without removing it. It is pi's own kind of off (what `pi config` does): the entry in `settings.json` gets an empty list for every kind of resource, so nothing of it loads. Switching it on again brings back the filters the entry had before.
-- **Install a package** runs `pi install` for you, into the panel's config folder or into the vault's `.pi` (`pi install -l`). The trash button runs `pi remove`. Packages the plugin installed can be switched off but not removed from here.
-- **Update now** runs `pi update --all`.
-- Reload pi (↻) to apply a change. With the separation switched off, the first list is your terminal pi's own and is shown read-only. Being offline only produces a notice; pi still starts.
+- Pi Harness has no install, remove, or update buttons. It shows exact terminal commands for recommended packages that are missing.
+- Reload pi (↻) to apply a load-filter change. With separation switched off, your terminal Pi's package list is shown read-only.
 
 | Extension | In the panel |
 | --- | --- |
@@ -149,7 +163,7 @@ Two of these needed more than styling. `/advisor` and `/btw` draw terminal overl
 
 ## Skills
 
-The panel is made for the [Obsidian skills](https://github.com/kepano/obsidian-skills) by Steph Ango. They are his work, so the plugin does not carry a copy: when pi has started and none of them are loaded, the plugin installs them from his repository with `pi install git:github.com/kepano/obsidian-skills` (part of the same one-time question as the extensions). `pi update --all` keeps them current along with everything else, and the update toast names the new commit. Obsidian skills that pi already finds, for example in the vault's `.pi/skills`, count, and then nothing is installed.
+The panel is made for the [Obsidian skills](https://github.com/kepano/obsidian-skills) by Steph Ango. They are his work, so the plugin does not carry a copy. If pi starts without any of them, Pi Harness shows the manual vault-local command `pi install -l git:github.com/kepano/obsidian-skills`. Obsidian skills that pi already finds, for example in the vault's `.pi/skills`, count, so no package is required in that case. Install and update the skills yourself outside Obsidian.
 
 | Skill | For |
 | --- | --- |
@@ -165,7 +179,7 @@ pi also finds the vault's own skills in `.pi/skills` and `.agents/skills`, and r
 
 ## Install
 
-Requires [pi](https://github.com/earendil-works/pi) on your machine (`pi --version`) with a provider logged in.
+Requires [pi](https://github.com/earendil-works/pi) on your machine (`pi --version`) with a provider logged in. For all panel integrations, install the [recommended Pi packages](#pi-extensions-the-panel-is-built-around) manually from the vault root; Pi Harness itself does not install or update dependencies.
 
 **From Obsidian:** Settings → Community plugins → Browse, search for "Pi Harness", install and enable. Until the plugin is listed there, [BRAT](https://github.com/TfTHacker/obsidian42-brat) installs it from this repository's releases.
 
@@ -190,4 +204,4 @@ npm run dev         # rebuild on change
 npm run test:rpc    # check the pi integration without Obsidian (add `-- --prompt` for the live checks: streaming, sessions, images; two small model calls)
 ```
 
-Layout: `src/requirements.ts` manages the required extensions, `src/view/toolRenderers.ts` holds the per-tool cards, `src/rpc` is the JSONL client for `pi --mode rpc`, `src/view` is the panel, `src/env.ts` recovers the login shell's `PATH` (apps started from the Dock don't get it), and `src/prompt.ts` holds the system prompt and the active-note context block.
+Layout: `src/requirements.ts` inspects recommended packages and owns their manual setup commands, `src/view/toolRenderers.ts` holds the per-tool cards, `src/rpc` is the JSONL client for `pi --mode rpc`, `src/view` is the panel, `src/env.ts` recovers the login shell's `PATH` (apps started from the Dock don't get it), and `src/prompt.ts` holds the system prompt and the active-note context block.

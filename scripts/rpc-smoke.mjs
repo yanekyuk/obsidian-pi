@@ -25,7 +25,7 @@ writeFileSync(
 export { resolveEnv } from ${JSON.stringify(join(root, "src/env.ts"))};
 export { listSessions } from ${JSON.stringify(join(root, "src/sessions.ts"))};
 export { splitHeader, splitPreviews, parseOptions, parseMultiSelect } from ${JSON.stringify(join(root, "src/view/InlineDialogs.ts"))};
-export { parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt } from ${JSON.stringify(join(root, "src/requirements.ts"))};
+export { Requirements, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS } from ${JSON.stringify(join(root, "src/requirements.ts"))};
 export { vaultMcpServers, probeMcp, unusableMcpServers } from ${JSON.stringify(join(root, "src/mcp.ts"))};
 export { tasksFrom } from ${JSON.stringify(join(root, "src/view/TodoPanel.ts"))};
 export { TOOL_RENDERERS } from ${JSON.stringify(join(root, "src/view/toolRenderers.ts"))};
@@ -53,7 +53,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, versionAt, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs } =
+const { PiRpcClient, Requirements, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -108,28 +108,6 @@ const check = (ok, label, detail = "") => {
 	check(!existsSync(join(root, "skills")) && !existsSync(join(target, "skills")), "no copy of anyone's skills in the repo or the bundle");
 }
 
-// ---- update detection: npm packages have a version, a git package of plain folders has a commit
-{
-	const { execFileSync } = await import("child_process");
-	const npmPkg = join(work, "npm-pkg");
-	mkdirSync(npmPkg);
-	writeFileSync(join(npmPkg, "package.json"), JSON.stringify({ version: "2.10.1" }));
-	check(versionAt(npmPkg) === "2.10.1", "an npm package is known by its version");
-	const gitPkg = join(work, "git-pkg");
-	mkdirSync(gitPkg);
-	const git = (...args) => execFileSync("git", ["-C", gitPkg, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).trim();
-	git("init", "-q");
-	writeFileSync(join(gitPkg, "SKILL.md"), "one");
-	git("add", "-A");
-	git("commit", "-q", "-m", "one");
-	const first = versionAt(gitPkg);
-	check(first === git("rev-parse", "--short=7", "HEAD"), "a git package without package.json is known by its commit", first);
-	writeFileSync(join(gitPkg, "SKILL.md"), "two");
-	git("commit", "-qam", "two");
-	git("pack-refs", "--all");
-	check(versionAt(gitPkg) === git("rev-parse", "--short=7", "HEAD") && versionAt(gitPkg) !== first, "a pulled update shows as a new commit, packed refs included");
-	check(versionAt(join(work, "nowhere")) === null, "a folder that is neither has no version");
-}
 
 // ---- the panel's own pi config folder: what crosses over from the user's, and what doesn't
 {
@@ -429,6 +407,9 @@ const check = (ok, label, detail = "") => {
 	check(parsed.length === 3 && parsed[1].source === "git:github.com/x/y", "pi list: sources paired with paths, (filtered) stripped");
 	const found = findRequired(parsed);
 	check(found.get("rpiv-todo")?.source.startsWith("npm:") && found.get("rpiv-web-tools")?.source.startsWith("../") && found.get("rpiv-btw") === null, "requirements: a local checkout counts as installed; absent ones are missing");
+	const commands = manualInstallCommands(["rpiv-todo", "pi-mcp-adapter"], true);
+	check(commands.join("\n") === "pi install -l npm:@juicesharp/rpiv-todo\npi install -l npm:pi-mcp-adapter\npi install -l git:github.com/kepano/obsidian-skills", "requirements: manual setup commands target this vault and use the canonical sources");
+	check(!["ensure", "install", "remove", "update", "installSkills"].some((name) => name in Requirements.prototype), "requirements: package access is inspection-only");
 }
 
 console.log(`inherited PATH: ${process.env.PATH}`);
