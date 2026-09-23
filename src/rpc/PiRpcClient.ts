@@ -6,6 +6,7 @@ import type {
 	Model,
 	RpcEvent,
 	RpcResponse,
+	SessionEntry,
 	SessionState,
 	SessionStats,
 	SlashCommand,
@@ -29,7 +30,7 @@ type EventListener = (event: RpcEvent) => void;
 type ExitListener = (info: { code: number | null; stderr: string; expected: boolean }) => void;
 
 // Commands that legitimately block for a long time and must not time out.
-const LONG_RUNNING = new Set(["prompt", "abort", "compact", "bash", "new_session", "switch_session", "clone"]);
+const LONG_RUNNING = new Set(["prompt", "abort", "compact", "bash", "new_session", "switch_session", "clone", "fork"]);
 const REQUEST_TIMEOUT_MS = 30_000;
 const STDERR_TAIL = 4000;
 
@@ -255,6 +256,17 @@ export class PiRpcClient {
 	// Copies the active branch into a new session file and makes that the current session.
 	cloneSession(): Promise<{ cancelled: boolean }> {
 		return this.request("clone");
+	}
+
+	// Starts a new session file holding the active branch up to just before a user message,
+	// and makes that the current session. `text` is the message forked from.
+	fork(entryId: string): Promise<{ text?: string; cancelled: boolean }> {
+		return this.request("fork", { entryId });
+	}
+
+	// Every entry of the session, abandoned branches and compacted history included.
+	getEntries(): Promise<{ entries: SessionEntry[]; leafId: string | null }> {
+		return this.request("get_entries");
 	}
 
 	compact(customInstructions?: string): Promise<unknown> {

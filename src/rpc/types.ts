@@ -83,6 +83,17 @@ export type AgentMessage =
 	| { role: "bashExecution"; command: string; output: string; exitCode: number | null }
 	| { role: string; [key: string]: unknown };
 
+export type UserMessage = Extract<AgentMessage, { role: "user" }>;
+
+// One entry of a session file. Entries form a tree through parentId; the session is on the
+// branch that runs from its leaf back to the root.
+export interface SessionEntry {
+	type: string;
+	id: string;
+	parentId: string | null;
+	message?: AgentMessage;
+}
+
 export type AssistantMessageEvent =
 	| { type: "text_start" | "thinking_start"; contentIndex: number }
 	| { type: "text_delta" | "thinking_delta" | "toolcall_delta"; contentIndex: number; delta: string }

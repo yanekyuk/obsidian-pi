@@ -39,7 +39,9 @@ export { splitTitle, markdownOf } from ${JSON.stringify(join(root, "src/view/wri
 export { commandAllowed } from ${JSON.stringify(join(root, "src/obsidianControl.ts"))};
 export { snapshotBefore, snapshotAfter, unchangedSince } from ${JSON.stringify(join(root, "src/view/revert.ts"))};
 export { transcriptMarkdown } from ${JSON.stringify(join(root, "src/exportNote.ts"))};
-export { resolveLinked, sessionDirs } from ${JSON.stringify(join(root, "src/noteLink.ts"))};`,
+export { resolveLinked, sessionDirs } from ${JSON.stringify(join(root, "src/noteLink.ts"))};
+export { entryIdOf } from ${JSON.stringify(join(root, "src/view/editMessage.ts"))};
+export { rewordMessage, withContext } from ${JSON.stringify(join(root, "src/prompt.ts"))};`,
 );
 // sessions.ts reaches prompt.ts, which imports the Obsidian API; outside the app a stub will do.
 const obsidianStub = {
@@ -53,7 +55,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs } =
+const { PiRpcClient, Requirements, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, rewordMessage, withContext } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -277,6 +279,20 @@ const check = (ok, label, detail = "") => {
 	check(resolveLinked("one.jsonl", [null, join(work, "nope"), join(work, "sessions-a")]) === join(work, "sessions-a", "one.jsonl") && resolveLinked("two.jsonl", [join(work, "sessions-a")]) === null, "link: a stored file name is found in the first folder that has it");
 	check(resolveLinked(join(work, "sessions-a", "one.jsonl"), []) && !resolveLinked("/nowhere/x.jsonl", []), "link: an absolute value stands on its own");
 	check(sessionDirs("/a", "/b/x.jsonl").join() === "/a,/b" && sessionDirs("/a", "/a/x.jsonl").join() === "/a" && sessionDirs("/a", "").join() === "/a", "link: folders to search are the configured one and the last session's, once each");
+}
+
+// ---- editing a sent message: finding it in the session, and the words it goes out with again
+{
+	const entry = (id, parentId, message, type = "message") => ({ type, id, parentId, message });
+	const user = (timestamp) => ({ role: "user", content: "again", timestamp });
+	// Two branches share the first prompt; the session is on the one ending in "b2".
+	const entries = [entry("m", null, undefined, "model_change"), entry("u1", "m", user(1)), entry("a1", "u1", { role: "assistant", content: [], timestamp: 2 }), entry("x2", "a1", user(3)), entry("b2", "a1", user(3))];
+	check(entryIdOf(user(1), entries, "b2") === "u1", "edit: a message is found by its timestamp, walking back from the leaf");
+	check(entryIdOf(user(3), entries, "b2") === "b2", "edit: a message is looked up on the branch the session is on, not an abandoned one");
+	check(entryIdOf(user(2), entries, "b2") === null && entryIdOf(user(1), entries, null) === null && entryIdOf({ role: "user", content: "" }, entries, "b2") === null, "edit: not found for an assistant's timestamp, an empty session, or a message without a timestamp");
+	const sent = withContext("What's this?", { path: "Inbox/Todo.md", selection: "buy milk" });
+	check(rewordMessage(sent, "And that?") === withContext("And that?", { path: "Inbox/Todo.md", selection: "buy milk" }), "edit: the new words go out with the note context of the original");
+	check(rewordMessage(sent, "/compact") === "/compact" && rewordMessage("plain", "new") === "new", "edit: a slash command goes out bare, as does a message that had no context");
 }
 
 // ---- tabs: what the title shows for the tabs out of sight, and what the layout brings back
@@ -514,6 +530,21 @@ if (withPrompt) {
 	const switched = await client.switchSession(original);
 	check(!switched.cancelled && (await client.getState()).sessionFile === original, "switch_session returns to the original");
 	check((await client.getMessages()).length >= 2, "switched session brings its transcript");
+
+	// ---- editing the first prompt: pi branches from just before it into a new file
+	const sentPong = events.find((e) => e.type === "message_start" && e.message.role === "user")?.message;
+	const { entries, leafId } = await client.getEntries();
+	const pongEntry = sentPong && entryIdOf(sentPong, entries, leafId);
+	check(Boolean(pongEntry), "edit: the message as it streamed is found among the session's entries", pongEntry ?? "not found");
+	if (pongEntry) {
+		const forked = await client.fork(pongEntry);
+		const branch = (await client.getState()).sessionFile;
+		check(!forked.cancelled && /pong/.test(forked.text ?? "") && branch !== original, "edit: fork moves pi onto a new session and names the message it branched from", forked.text);
+		// pi keeps the system prompt as a message of its own; the panel doesn't show it.
+		const inBranch = (await client.getMessages()).filter((m) => m.role !== "system");
+		check(inBranch.length === 0, "edit: the branch holds what came before the edited message (nothing, for the first)", inBranch.map((m) => m.role).join());
+		check((await client.switchSession(original)).cancelled === false && (await client.getMessages()).length >= 2, "edit: the original conversation is left as it was");
+	}
 
 	// ---- images: a solid red PNG sent with no text at all, the way a bare paste goes out
 	const png = (() => {

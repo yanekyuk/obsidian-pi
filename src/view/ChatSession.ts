@@ -7,10 +7,10 @@ import { BROWSER_CHANNEL } from "../browser";
 import { OBSIDIAN_CHANNEL } from "../obsidianControl";
 import type PiAgentPlugin from "../main";
 import { probeMcp, unusableMcpServers, vaultMcpServers } from "../mcp";
-import { readActiveContext, splitContext, withContext } from "../prompt";
+import { readActiveContext, rewordMessage, splitContext, withContext } from "../prompt";
 import { findRequired, manualInstallCommands, OBSIDIAN_SKILLS, SKILLS_PACKAGE } from "../requirements";
 import { PiRpcClient } from "../rpc/PiRpcClient";
-import type { AgentMessage, AssistantMessageEvent, ExtensionUiRequest, ImageContent, RpcEvent, SessionState, SlashCommand, ToolCallContent } from "../rpc/types";
+import type { AgentMessage, AssistantMessageEvent, ExtensionUiRequest, ImageContent, RpcEvent, SessionState, SlashCommand, ToolCallContent, UserMessage } from "../rpc/types";
 import { contentText } from "../sessions";
 import { AttachmentTray, imageFilesOf, imageSrc } from "./Attachments";
 import { MarkdownBlock, ThinkingBlock, ToolCard, rerenderMarkdownIn, type RenderHost } from "./blocks";
@@ -25,6 +25,7 @@ import { appendToNote, createNote, createNoteFrom, insertIntoNote, markdownOf } 
 import { transcriptMarkdown } from "../exportNote";
 import { linkedSession, writeLink } from "../noteLink";
 import { EDITING_TOOLS, snapshotAfter, snapshotBefore, swapVersion, unchangedSince, type FileSnapshot } from "./revert";
+import { editInPlace, entryIdOf } from "./editMessage";
 
 const STICK_TO_BOTTOM_PX = 48;
 const MCP_RECHECK_MS = 30_000;
@@ -49,6 +50,9 @@ const { shell } = require("electron") as { shell: { openPath(path: string): Prom
 
 type Block = MarkdownBlock | ThinkingBlock | ToolCard;
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+
+const imagesOf = (message: UserMessage): ImageContent[] =>
+	Array.isArray(message.content) ? message.content.filter((b): b is ImageContent => b.type === "image") : [];
 
 // A message sent while pi was compacting. pi refuses prompts then (its terminal UI holds them
 // back the same way), so the tab keeps them and sends them on once compaction ends.
@@ -864,6 +868,38 @@ export class ChatSession {
 		}
 	}
 
+	// Takes the conversation back to just before `message` and sends `text` in its place, with
+	// the note context and images the message had. pi can only branch into a new session file
+	// over RPC, so the conversation as it was stays in the session list and the tab goes on in
+	// the branch.
+	private async rerunFrom(message: UserMessage, text: string): Promise<void> {
+		const images = imagesOf(message);
+		if (!text && !images.length) return;
+		if (!this.client.running) {
+			new Notice("pi isn't running. Start it again with the panel's ↻ button.");
+			return;
+		}
+		if (this.compacting) {
+			new Notice("pi is compacting. Edit the message once it's done.");
+			return;
+		}
+		try {
+			await this.stop();
+			const { entries, leafId } = await this.client.getEntries();
+			const entryId = entryIdOf(message, entries, leafId);
+			if (!entryId) {
+				new Notice("Couldn't find that message in the session.");
+				return;
+			}
+			const { cancelled } = await this.client.fork(entryId);
+			if (cancelled) return;
+			await this.syncSession();
+			await this.client.prompt(rewordMessage(contentText(message.content), text), { images });
+		} catch (err) {
+			new Notice(`pi: ${(err as Error).message}`);
+		}
+	}
+
 	// A fresh session in this tab, on the pi that is already running.
 	async newSession(): Promise<void> {
 		if (!this.client.running) {
@@ -1024,7 +1060,7 @@ export class ChatSession {
 				void this.refreshStats();
 				break;
 			case "message_start":
-				if (e.message.role === "user") this.renderUser(e.message as Extract<AgentMessage, { role: "user" }>);
+				if (e.message.role === "user") this.renderUser(e.message as UserMessage);
 				else if (e.message.role === "assistant") this.live = this.beginAssistant();
 				break;
 			case "message_update":
@@ -1172,7 +1208,7 @@ export class ChatSession {
 		this.side.reset();
 		let tasks: ReturnType<typeof tasksFrom> = null;
 		for (const m of messages) {
-			if (m.role === "user") this.renderUser(m as Extract<AgentMessage, { role: "user" }>);
+			if (m.role === "user") this.renderUser(m as UserMessage);
 			else if (m.role === "assistant") this.finishAssistant(this.beginAssistant(), m as AssistantMessage);
 			else if (m.role === "toolResult") {
 				const r = m as Extract<AgentMessage, { role: "toolResult" }>;
@@ -1209,7 +1245,7 @@ export class ChatSession {
 		return this.messagesEl.createDiv({ cls: `pi-msg ${cls}` });
 	}
 
-	private renderUser(message: Extract<AgentMessage, { role: "user" }>): void {
+	private renderUser(message: UserMessage): void {
 		const { text, notePath, hasSelection } = splitContext(contentText(message.content));
 		if (!this.firstPrompt) {
 			this.firstPrompt = text.replace(/\s+/g, " ").trim().slice(0, 60);
@@ -1221,7 +1257,7 @@ export class ChatSession {
 			setIcon(chip.createSpan({ cls: "pi-icon" }), hasSelection ? "text-select" : "file-text");
 			chip.createSpan({ text: notePath.replace(/\.md$/, "").split("/").pop() + (hasSelection ? " (selection)" : "") });
 		}
-		const images = Array.isArray(message.content) ? message.content.filter((b): b is ImageContent => b.type === "image") : [];
+		const images = imagesOf(message);
 		if (images.length) {
 			const strip = el.createDiv({ cls: "pi-msg-images" });
 			for (const image of images) {
@@ -1231,6 +1267,11 @@ export class ChatSession {
 			}
 		}
 		if (text) new MarkdownBlock(this.renderHost, el.createDiv({ cls: "pi-text markdown-rendered" })).set(text);
+		if (message.timestamp !== undefined) {
+			const edit = el.createDiv({ cls: "pi-msg-actions" }).createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Edit and run again from here" } });
+			setIcon(edit, "pencil");
+			edit.addEventListener("click", () => editInPlace(el, text, (edited) => this.rerunFrom(message, edited)));
+		}
 		this.keepScrolled();
 	}
 

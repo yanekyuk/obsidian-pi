@@ -47,6 +47,13 @@ export function withContext(message: string, ctx: ActiveContext | null): string 
 	return `<${CONTEXT_TAG}>\n${lines.join("\n")}\n</${CONTEXT_TAG}>\n\n${message}`;
 }
 
+// A sent message with its words replaced, keeping the note context it went out with.
+export function rewordMessage(original: string, text: string): string {
+	const match = original.match(CONTEXT_RE);
+	if (!match || text.startsWith("/")) return text;
+	return match[0] + text;
+}
+
 // Inverse of withContext, for rendering stored user messages.
 export function splitContext(message: string): { text: string; notePath: string | null; hasSelection: boolean } {
 	const match = message.match(CONTEXT_RE);

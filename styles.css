@@ -80,6 +80,23 @@
 	border-radius: var(--radius-l);
 	background: var(--background-modifier-hover);
 	border: 1px solid var(--background-modifier-border);
+	position: relative;
+}
+
+/* Editing a sent message: the bubble widens into a text box with Cancel and Send under it. */
+.pi-msg-user.is-editing {
+	align-self: stretch;
+	max-width: none;
+	border-color: var(--background-modifier-border-focus);
+}
+.pi-msg-edit textarea.pi-input {
+	padding: 0;
+}
+.pi-msg-edit-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--size-2-2);
+	margin-top: var(--size-2-2);
 }
 
 .pi-msg-context {
@@ -99,8 +116,21 @@
 	transition: opacity 120ms ease;
 }
 .pi-msg-assistant:hover .pi-msg-actions,
+.pi-msg-user:hover .pi-msg-actions,
 .pi-msg-actions:focus-within {
 	opacity: 1;
+}
+/* Beside the bubble, in the space its narrower width leaves, so the bubble keeps its size.
+   Padding rather than margin: the pointer stays on the message on its way to the button. */
+.pi-msg-user > .pi-msg-actions {
+	position: absolute;
+	right: 100%;
+	bottom: 0;
+	margin: 0;
+	padding-right: var(--size-2-1);
+}
+.pi-msg-user.is-editing > .pi-msg-actions {
+	display: none;
 }
 .pi-msg-actions .clickable-icon {
 	padding: var(--size-2-1) var(--size-2-2);

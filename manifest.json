@@ -1,7 +1,7 @@
 {
 	"id": "pi-harness",
 	"name": "Pi Harness",
-	"version": "0.1.15",
+	"version": "0.1.16",
 	"minAppVersion": "1.5.0",
 	"description": "Chat with the pi coding agent in your vault: tabs, sessions, tasks and questions in a panel that follows your theme.",
 	"author": "Yanek Yuk",
