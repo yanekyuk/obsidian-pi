@@ -54,13 +54,15 @@ type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 const imagesOf = (message: UserMessage): ImageContent[] =>
 	Array.isArray(message.content) ? message.content.filter((b): b is ImageContent => b.type === "image") : [];
 
+type DeliveryMode = "steer" | "followUp";
+
 // A message sent while pi was compacting. pi refuses prompts then (its terminal UI holds them
 // back the same way), so the tab keeps them and sends them on once compaction ends.
 interface HeldMessage {
 	text: string;
 	message: string;
 	images: ImageContent[];
-	mode: "steer" | "followUp";
+	mode: DeliveryMode;
 }
 
 interface LiveAssistant {
@@ -98,6 +100,7 @@ export class ChatSession {
 	private renderHost: RenderHost;
 	private state: SessionState | null = null;
 	private busy = false;
+	private deliveryMode: DeliveryMode = "steer";
 	private started = false;
 	private startup: Promise<void> | null = null;
 	private connecting = false;
@@ -143,7 +146,9 @@ export class ChatSession {
 	private statsEl!: HTMLElement;
 	private compactBtn!: HTMLElement;
 	private stopBtn!: HTMLElement;
-	private queueBtn!: HTMLElement;
+	private deliveryModesEl!: HTMLElement;
+	private steerModeBtn!: HTMLButtonElement;
+	private queueModeBtn!: HTMLButtonElement;
 	private sendBtn!: HTMLElement;
 	private suggest!: ComposerSuggest;
 	private attachments!: AttachmentTray;
@@ -352,6 +357,12 @@ export class ChatSession {
 			void this.attach(files);
 		});
 
+		this.deliveryModesEl = composer.createDiv({ cls: "pi-delivery-modes", attr: { role: "group", "aria-label": "When to deliver this message" } });
+		this.steerModeBtn = this.deliveryModesEl.createEl("button", { text: "Steer · next step", attr: { type: "button", title: "Pi reads it after the current step (Enter)" } });
+		this.queueModeBtn = this.deliveryModesEl.createEl("button", { text: "Queue · after task", attr: { type: "button", title: "Pi reads it once the current task finishes (Enter when selected, or Alt+Enter)" } });
+		this.steerModeBtn.addEventListener("click", () => this.setDeliveryMode("steer"));
+		this.queueModeBtn.addEventListener("click", () => this.setDeliveryMode("followUp"));
+
 		const bar = composer.createDiv({ cls: "pi-composer-bar" });
 		this.modelBtn = bar.createEl("button", { cls: "pi-pill clickable-icon", attr: { "aria-label": "Switch model" } });
 		this.modelBtn.addEventListener("click", () => void this.pickModel());
@@ -363,10 +374,6 @@ export class ChatSession {
 		this.compactBtn.addEventListener("click", () => void this.compact());
 		this.compactBtn.hide();
 
-		this.queueBtn = bar.createEl("button", { cls: "pi-queue-btn clickable-icon", attr: { "aria-label": "Queue for when pi has finished (Alt+Enter)" } });
-		setIcon(this.queueBtn, "list-end");
-		this.queueBtn.addEventListener("click", () => void this.send("followUp"));
-		this.queueBtn.hide();
 		this.stopBtn = bar.createEl("button", { cls: "pi-stop", attr: { "aria-label": "Stop (Esc)" } });
 		setIcon(this.stopBtn, "square");
 		this.stopBtn.addEventListener("click", () => void this.stop());
@@ -421,6 +428,7 @@ export class ChatSession {
 
 	private setBusy(busy: boolean): void {
 		this.busy = busy;
+		if (!busy && !this.compacting) this.deliveryMode = "steer";
 		this.stopBtn.toggle(busy);
 		this.el.toggleClass("is-busy", busy);
 		this.renderComposerMode();
@@ -434,25 +442,40 @@ export class ChatSession {
 		this.host.changed(this);
 	}
 
-	// What Enter will do right now, said where the user is looking: on the buttons and in the box.
+	private setDeliveryMode(mode: DeliveryMode): void {
+		this.deliveryMode = mode;
+		this.renderComposerMode();
+		this.focusComposer();
+	}
+
+	// Show the choice even before a draft exists, so the next Enter/send is predictable.
 	private renderComposerMode(): void {
 		if (!this.sendBtn) return;
 		const waiting = this.busy || this.compacting;
 		const hasDraft = this.inputEl.value.trim() !== "" || this.attachments.count > 0;
-		// One round button at rest. While pi works it is Stop, and once there is something
-		// to send, Send comes back beside it along with the choice to queue instead.
-		this.queueBtn.toggle(waiting && hasDraft);
+		this.deliveryModesEl.toggle(waiting);
+		this.steerModeBtn.setAttr("aria-pressed", this.deliveryMode === "steer" ? "true" : "false");
+		this.queueModeBtn.setAttr("aria-pressed", this.deliveryMode === "followUp" ? "true" : "false");
+		// At rest only Send appears. While pi works Stop takes its place until a draft is ready.
 		this.sendBtn.toggle(!this.busy || hasDraft);
-		this.sendBtn.setAttr("aria-label", this.compacting ? "Send once compaction is done (Enter)" : this.busy ? "Steer: pi reads it before its next step (Enter)" : "Send (Enter)");
-		this.inputEl.placeholder = this.compacting
-			? "Compacting… what you send now goes out when it's done"
-			: this.busy
-				? "Steer pi…  Alt+Enter queues it for when pi has finished"
-				: "Ask pi…  / for commands, @ for notes";
+		if (this.compacting) {
+			this.sendBtn.setAttr("aria-label", `Send after compaction as ${this.deliveryMode === "steer" ? "steering" : "a follow-up"} (Enter)`);
+			this.inputEl.placeholder = "Compacting… what you send now goes out when it's done";
+		} else if (this.busy && this.deliveryMode === "steer") {
+			this.sendBtn.setAttr("aria-label", "Steer pi after its next step (Enter)");
+			this.inputEl.placeholder = "Steer pi…  Alt+Enter queues after the task";
+		} else if (this.busy) {
+			this.sendBtn.setAttr("aria-label", "Queue for after pi finishes (Enter)");
+			this.inputEl.placeholder = "Queue for after pi finishes…";
+		} else {
+			this.sendBtn.setAttr("aria-label", "Send (Enter)");
+			this.inputEl.placeholder = "Ask pi…  / for commands, @ for notes";
+		}
 	}
 
 	private setCompacting(compacting: boolean): void {
 		this.compacting = compacting;
+		if (!compacting && !this.busy) this.deliveryMode = "steer";
 		this.el.toggleClass("is-compacting", compacting);
 		this.renderComposerMode();
 		this.host.changed(this);
@@ -706,7 +729,7 @@ export class ChatSession {
 			void this.stop();
 		} else if (evt.key === "Enter" && !evt.shiftKey) {
 			evt.preventDefault();
-			void this.send(evt.altKey ? "followUp" : "steer");
+			void this.send(evt.altKey ? "followUp" : this.deliveryMode);
 		}
 	}
 
@@ -721,14 +744,14 @@ export class ChatSession {
 		this.focusComposer();
 	}
 
-	// While pi is working, Enter steers the current run and Alt+Enter queues a follow-up.
+	// While pi is working, Enter uses the selected delivery mode; Alt+Enter always queues.
 	// Sends whatever is in the composer, waiting for pi to come up first if it has to.
 	async sendDraft(): Promise<void> {
 		await this.whenReady();
 		await this.send("followUp");
 	}
 
-	private async send(whileBusy: "steer" | "followUp" = "steer"): Promise<void> {
+	private async send(whileBusy: DeliveryMode = this.deliveryMode): Promise<void> {
 		const text = this.inputEl.value.trim();
 		if (!text && !this.attachments.count) return;
 		if (this.runLocalCommand(text)) {

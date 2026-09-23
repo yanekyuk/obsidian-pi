@@ -488,6 +488,39 @@ textarea.pi-input:active {
 	box-shadow: none;
 }
 
+/* Delivery is a choice rather than a second send button; keep it visible without a draft. */
+.pi-delivery-modes {
+	display: flex;
+	gap: var(--size-2-1);
+	align-self: flex-start;
+	width: max-content;
+	max-width: 100%;
+	padding: var(--size-2-1);
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+}
+.pi-delivery-modes button {
+	flex: 1;
+	min-width: 0;
+	height: auto;
+	padding: var(--size-2-1) var(--size-4-2);
+	border-radius: var(--radius-s);
+	background: none;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	text-align: center;
+}
+.pi-delivery-modes button[aria-pressed="true"] {
+	background: var(--background-primary);
+	color: var(--text-normal);
+	box-shadow: var(--shadow-s);
+}
+.pi-delivery-modes button:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 1px;
+}
+
 .pi-composer-bar {
 	display: flex;
 	align-items: center;
@@ -523,10 +556,9 @@ textarea.pi-input:active {
 	white-space: nowrap;
 }
 /* The round buttons at the end of the bar: Send, and Stop while pi works. Same size and shape;
-   only Send carries the accent. Queue is a quiet icon the same height beside them. */
+   only Send carries the accent. */
 .pi-send,
-.pi-stop,
-.pi-queue-btn {
+.pi-stop {
 	flex: none;
 	display: inline-flex;
 	align-items: center;
@@ -553,13 +585,6 @@ textarea.pi-input:active {
 	width: 10px;
 	height: 10px;
 	fill: currentColor;
-}
-.pi-queue-btn {
-	color: var(--text-muted);
-}
-.pi-queue-btn .svg-icon {
-	width: var(--icon-s);
-	height: var(--icon-s);
 }
 .pi-queue-clear .svg-icon {
 	width: var(--icon-xs);
