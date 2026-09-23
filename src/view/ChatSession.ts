@@ -1,4 +1,4 @@
-import { Component, Keymap, Menu, Notice, TFile, setIcon, type App, type ItemView } from "obsidian";
+import { Component, Keymap, Menu, Notice, TFile, setIcon, type App, type Events, type ItemView } from "obsidian";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { basename, relative, resolve } from "path";
@@ -13,7 +13,7 @@ import { PiRpcClient } from "../rpc/PiRpcClient";
 import type { AgentMessage, AssistantMessageEvent, ExtensionUiRequest, ImageContent, RpcEvent, SessionState, SlashCommand, ToolCallContent } from "../rpc/types";
 import { contentText } from "../sessions";
 import { AttachmentTray, imageFilesOf, imageSrc } from "./Attachments";
-import { MarkdownBlock, ThinkingBlock, ToolCard, type RenderHost } from "./blocks";
+import { MarkdownBlock, ThinkingBlock, ToolCard, rerenderMarkdownIn, type RenderHost } from "./blocks";
 import { ComposerSuggest } from "./ComposerSuggest";
 import { InlineDialogs } from "./InlineDialogs";
 import { readEnabledModels, scopeModels } from "../models";
@@ -159,6 +159,10 @@ export class ChatSession {
 		this.el.hide();
 		host.view.addChild(this.component);
 		this.renderHost = { app: host.app, component: this.component, onContentChanged: () => this.keepScrolled() };
+		// Obsidian's note views re-render on this; the transcript has to follow, or e.g. Mermaid's "Allow" does nothing here.
+		// Untyped in obsidian.d.ts, hence the plain Events signature.
+		const workspace: Events = host.app.workspace;
+		this.component.registerEvent(workspace.on("post-processor-change", () => rerenderMarkdownIn(this.el)));
 		this.client.onEvent((e) => this.handleEvent(e));
 		this.client.onExit((info) => this.handleExit(info));
 		this.buildDom();

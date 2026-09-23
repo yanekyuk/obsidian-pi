@@ -41,6 +41,15 @@ export interface RenderHost {
 	onContentChanged: () => void;
 }
 
+// The block behind each element, so a whole panel can be rendered again without keeping blocks alive.
+const blocksByEl = new WeakMap<HTMLElement, MarkdownBlock>();
+
+// Renders every Markdown block under root again. Obsidian asks for this with "post-processor-change",
+// e.g. once the vault's Mermaid diagrams are allowed, since its guard only goes away on a fresh render.
+export function rerenderMarkdownIn(root: HTMLElement): void {
+	for (const el of Array.from(root.querySelectorAll<HTMLElement>(".pi-md-block"))) blocksByEl.get(el)?.rerender();
+}
+
 // Markdown that re-renders as text streams in, at most once per interval.
 export class MarkdownBlock {
 	private text = "";
@@ -51,7 +60,10 @@ export class MarkdownBlock {
 	constructor(
 		private host: RenderHost,
 		readonly el: HTMLElement,
-	) {}
+	) {
+		el.addClass("pi-md-block");
+		blocksByEl.set(el, this);
+	}
 
 	append(delta: string): void {
 		this.text += delta;
@@ -61,6 +73,10 @@ export class MarkdownBlock {
 	set(text: string): void {
 		if (text === this.text && !this.stale && this.timer === null) return;
 		this.text = text;
+		this.schedule();
+	}
+
+	rerender(): void {
 		this.schedule();
 	}
 
