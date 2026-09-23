@@ -8,6 +8,7 @@
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
 		"install:vault": "node scripts/install.mjs",
+		"install:test": "node scripts/install.mjs --test",
 		"test:rpc": "node scripts/rpc-smoke.mjs"
 	},
 	"keywords": [

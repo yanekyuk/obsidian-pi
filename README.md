@@ -229,6 +229,7 @@ Then enable **Pi Harness** under Settings → Community plugins, and open it fro
 ```bash
 npm run dev         # rebuild on change
 npm run test:rpc    # check the pi integration without Obsidian (add `-- --prompt` for the live checks: streaming, sessions, images; two small model calls)
+npm run install:test  # after a build: install it as "Pi Harness (test)", next to the released plugin
 ```
 
 Layout: `src/requirements.ts` inspects recommended packages and owns their manual setup commands, `src/view/toolRenderers.ts` holds the per-tool cards, `src/rpc` is the JSONL client for `pi --mode rpc`, `src/view` is the panel, `src/env.ts` recovers the login shell's `PATH` (apps started from the Dock don't get it), `src/prompt.ts` holds the system prompt and the active-note context block, and `src/search` is `obsidian_search`: `SearchIndex.ts` ranks (no Obsidian API, tested by `test:rpc`) and `VaultSearch.ts` keeps it fed from the vault. The pi extensions the plugin ships are in `pi-extension/`. Ideas not built yet: [docs/semantic-search.md](docs/semantic-search.md).
