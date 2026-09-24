@@ -1,6 +1,5 @@
 import { ItemView, Menu, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import { existsSync } from "fs";
-import { dirname } from "path";
 import { readAdvisorConfig } from "../advisor";
 import type PiAgentPlugin from "../main";
 import type { SessionSummary } from "../sessions";
@@ -208,10 +207,7 @@ export class ChatView extends ItemView {
 		});
 
 		this.drawer = new SessionsDrawer(root, {
-			sessionDir: () => {
-				const file = this.active?.heldSessionFile ?? this.tabs.find((tab) => tab.heldSessionFile)?.heldSessionFile ?? (this.plugin.settings.lastSessionFile || null);
-				return file ? dirname(file) : null;
-			},
+			sessionDirs: () => this.plugin.sessionDirectories(),
 			currentSessionFile: () => this.active?.heldSessionFile ?? null,
 			sessionsOpenElsewhere: () => new Set(this.plugin.heldSessionFiles(this.active)),
 			openSession: (session) => void this.openSession(session.path),

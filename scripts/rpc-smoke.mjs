@@ -88,6 +88,23 @@ const check = (ok, label, detail = "") => {
 	check(byFile["c-cleared.jsonl"].title === "back to the prompt" && !byFile["c-cleared.jsonl"].named, "cleared name falls back to the first prompt");
 	check(byFile["d-mention.jsonl"].title.startsWith("what does") && !byFile["d-mention.jsonl"].named, "a message mentioning session_info is not a name");
 	check(byFile["e-empty.jsonl"].title === "Empty session", "session with no messages");
+
+	const otherDir = join(work, "other-session-profile");
+	mkdirSync(otherDir);
+	writeFileSync(join(otherDir, "from-other-profile.jsonl"), header + user("other profile"));
+	const missingDir = join(work, "no-session-profile-yet");
+	const acrossProfiles = await listSessions([missingDir, dir, otherDir, dir]);
+	check(acrossProfiles.length === 6 && acrossProfiles.some((s) => s.title === "other profile"), "session list merges profiles, ignores missing and duplicate directories");
+	let readFailed = false;
+	try {
+		await listSessions(join(dir, "ignored.txt"));
+	} catch {
+		readFailed = true;
+	}
+	check(readFailed, "session list reports unexpected directory errors");
+
+	for (let i = 0; i < 201; i++) writeFileSync(join(otherDir, `history-${i}.jsonl`), header + user(`older session ${i}`));
+	check((await listSessions([dir, otherDir])).length === 207, "session list does not hide history beyond 200 files");
 }
 
 // ---- bundled files: what an install from the community list has to unpack for itself

@@ -1,5 +1,5 @@
 import { promises as fs } from "fs";
-import { join } from "path";
+import { join, sep } from "path";
 import { splitContext } from "./prompt";
 
 export interface SessionSummary {
@@ -10,7 +10,6 @@ export interface SessionSummary {
 	mtime: number;
 }
 
-const MAX_SESSIONS = 200;
 const READ_CONCURRENCY = 8;
 const SESSION_INFO = Buffer.from('"type":"session_info"');
 const NEWLINE = 0x0a;
@@ -19,19 +18,22 @@ const NEWLINE = 0x0a;
 // can only change when the file does, so remember it per (mtime, size).
 const titleCache = new Map<string, { stamp: string; title: string; named: boolean }>();
 
-// pi has no RPC command for listing sessions, but sessions for a cwd live side by
-// side, so the directory of the current session file is the place to look.
-export async function listSessions(sessionDir: string): Promise<SessionSummary[]> {
-	const names = (await fs.readdir(sessionDir)).filter((n) => n.endsWith(".jsonl"));
-	const files = await Promise.all(
-		names.map(async (name) => {
-			const path = join(sessionDir, name);
+// A vault's sessions may live in either pi profile after an inheritance change.
+// Missing directories are normal (pi creates them on first write); other errors are not.
+export async function listSessions(sessionDirs: string | string[]): Promise<SessionSummary[]> {
+	const dirs = [...new Set(Array.isArray(sessionDirs) ? sessionDirs : [sessionDirs])];
+	const files = (await Promise.all(dirs.map(async (dir) => {
+		const names = await fs.readdir(dir).catch((err: NodeJS.ErrnoException) => {
+			if (err.code === "ENOENT") return [];
+			throw err;
+		});
+		return Promise.all(names.filter((name) => name.endsWith(".jsonl")).map(async (name) => {
+			const path = join(dir, name);
 			const stat = await fs.stat(path);
 			return { path, mtime: stat.mtimeMs, stamp: `${stat.mtimeMs}:${stat.size}` };
-		}),
-	);
+		}));
+	}))).flat();
 	files.sort((a, b) => b.mtime - a.mtime);
-	files.length = Math.min(files.length, MAX_SESSIONS);
 
 	const result: SessionSummary[] = new Array(files.length);
 	let next = 0;
@@ -48,7 +50,8 @@ export async function listSessions(sessionDir: string): Promise<SessionSummary[]
 		}
 	};
 	await Promise.all(Array.from({ length: READ_CONCURRENCY }, worker));
-	for (const path of titleCache.keys()) if (path.startsWith(sessionDir) && !files.some((f) => f.path === path)) titleCache.delete(path);
+	const listed = new Set(files.map((file) => file.path));
+	for (const path of titleCache.keys()) if (dirs.some((dir) => path.startsWith(`${dir}${sep}`)) && !listed.has(path)) titleCache.delete(path);
 	return result;
 }
 

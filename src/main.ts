@@ -1,7 +1,7 @@
 import { FileSystemAdapter, Notice, Plugin, TFile, addIcon, type Editor } from "obsidian";
 import { existsSync, promises as fs } from "fs";
 import { homedir } from "os";
-import { basename, delimiter, isAbsolute, join, resolve } from "path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "path";
 import { DEFAULT_INHERITANCE, HARNESS_AGENT_DIR, USER_AGENT_DIR, prepareAgentDir, sessionDirFor } from "./agentDir";
 import { loadsAllSkills, readPackageEntries, sourceOf } from "./packages";
 import { MCP_ADAPTER, Requirements } from "./requirements";
@@ -257,7 +257,7 @@ export default class PiAgentPlugin extends Plugin {
 		const view = await this.activateView();
 		if (!view) return;
 		if (params.session) {
-			const path = resolveLinked(params.session, sessionDirs(this.sessionDir(), this.settings.lastSessionFile));
+			const path = resolveLinked(params.session, this.sessionDirectories());
 			if (!path) return void new Notice("No such pi session here.");
 			await view.openSession(path);
 		} else if (params.note) {
@@ -277,12 +277,24 @@ export default class PiAgentPlugin extends Plugin {
 		return s.isolate && !s.inherit.sessions ? sessionDirFor(this.vaultPath, HARNESS_AGENT_DIR) : sessionDirFor(this.vaultPath);
 	}
 
+	// Both profiles can hold this vault's history after a setting change. Keep directories
+	// of already-known sessions too, without guessing that other vaults are this one.
+	sessionDirectories(): string[] {
+		const vault = this.vaultPath;
+		return [...new Set([
+			...sessionDirs(this.sessionDir(), this.settings.lastSessionFile),
+			sessionDirFor(vault),
+			sessionDirFor(vault, HARNESS_AGENT_DIR),
+			...this.heldSessionFiles().map(dirname),
+		])];
+	}
+
 	// The note's own session when it has one here; otherwise a new tab that becomes its session.
 	async openForNote(file: TFile): Promise<void> {
 		const view = await this.activateView();
 		if (!view) return;
 		const linked = linkedSession(this.app, file);
-		const path = linked ? resolveLinked(linked, sessionDirs(this.sessionDir(), this.settings.lastSessionFile)) : null;
+		const path = linked ? resolveLinked(linked, this.sessionDirectories()) : null;
 		if (path) return view.openSession(path);
 		if (linked) new Notice("The session linked to this note isn't on this machine, so a new one starts.");
 		view.newTab();

@@ -42,7 +42,7 @@ While the panel is closed or out of sight, the status bar shows what pi is doing
 
 `obsidian://pi-harness?prompt=…` opens the panel with the words in the composer of a new tab, from Shortcuts, Raycast or a link; add `&send=1` to send them, `&note=Folder/Note` to open pi for that note first, or use `?session=<file name>` to open a session.
 
-The toolbar at the top of the panel shows the session name, with buttons for a new session, the session list and a menu. The clock button opens the session list for the vault: search it, move with the arrow keys, Enter to open. Right-click a session (or use its `…` button) to rename, duplicate or move it to the system trash. Unnamed sessions are listed by their first prompt. Rename the session on screen from the `⋮` menu.
+The toolbar at the top of the panel shows the session name, with buttons for a new session, the session list and a menu. The clock button opens the session list for the vault, including sessions in either Pi profile after a session-history setting change, even from a fresh panel: search it, move with the arrow keys, Enter to open. Right-click a session (or use its `…` button) to rename, duplicate or move it to the system trash. Unnamed sessions are listed by their first prompt. Rename the session on screen from the `⋮` menu.
 
 ### Tabs
 

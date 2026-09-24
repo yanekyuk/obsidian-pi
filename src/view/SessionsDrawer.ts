@@ -2,7 +2,7 @@ import { Menu, moment, prepareFuzzySearch, setIcon } from "obsidian";
 import { listSessions, type SessionSummary } from "../sessions";
 
 export interface SessionsHost {
-	sessionDir(): string | null;
+	sessionDirs(): string[];
 	currentSessionFile(): string | null;
 	// Session files held by other chat panels; two pi processes must never share one.
 	sessionsOpenElsewhere(): Set<string>;
@@ -74,17 +74,18 @@ export class SessionsDrawer {
 
 	async refresh(): Promise<void> {
 		if (!this.isOpen) return;
-		const dir = this.host.sessionDir();
-		if (!dir) {
-			this.sessions = [];
-			return this.render("This session isn't saved to disk, so there is no history to browse.");
-		}
 		const id = ++this.loadId;
 		if (!this.sessions.length) this.render("Loading…");
-		const sessions = await listSessions(dir).catch(() => []);
-		if (id !== this.loadId) return; // a newer refresh superseded this one
-		this.sessions = sessions;
-		this.render();
+		try {
+			const sessions = await listSessions(this.host.sessionDirs());
+			if (id !== this.loadId) return; // a newer refresh superseded this one
+			this.sessions = sessions;
+			this.render();
+		} catch (err) {
+			if (id !== this.loadId) return;
+			this.sessions = [];
+			this.render(`Couldn't read sessions: ${(err as Error).message}`);
+		}
 	}
 
 	private onKey(evt: KeyboardEvent): void {
