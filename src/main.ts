@@ -12,6 +12,7 @@ import { extractBundledFiles } from "./bundled";
 import { StatusBar } from "./statusBar";
 import { linkedSession, resolveLinked, sessionDirs } from "./noteLink";
 import { resolveEnv } from "./env";
+import { sharedPiEnvironment } from "./piEnvironment";
 import { buildSystemPrompt } from "./prompt";
 import type { PiSpawnOptions } from "./rpc/PiRpcClient";
 import { DEFAULT_SETTINGS, PiAgentSettingTab, type PiAgentSettings } from "./settings";
@@ -206,7 +207,7 @@ export default class PiAgentPlugin extends Plugin {
 
 	// The environment every pi process the plugin starts uses: chats, side questions, and package inspection.
 	private async piEnv(): Promise<NodeJS.ProcessEnv> {
-		const env = { ...(await resolveEnv()) };
+		const env = sharedPiEnvironment(await resolveEnv());
 		// The Obsidian CLI skill calls `obsidian`. The plugin's launcher goes last on the PATH, so
 		// a command of that name the user already has wins.
 		if (this.manifest.dir) env.PATH = [env.PATH, join(this.vaultPath, this.manifest.dir, "bin")].filter(Boolean).join(delimiter);
@@ -331,6 +332,8 @@ export default class PiAgentPlugin extends Plugin {
 			.map((p) => p.trim())
 			.filter(Boolean)
 			.map((p) => (isAbsolute(p) ? p : join(vault, p)));
+		// Keep panel-only overrides out of shell commands that can launch other apps.
+		if (this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "panel-shell.ts"));
 		if (s.isolate) {
 			// A config folder of its own doesn't stop pi from finding ~/.agents/skills, so skills are
 			// named one by one instead: those of installed packages and the vault's own. The vault's

@@ -46,7 +46,7 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	systemPromptAddendum: "",
 	extraArgs: "",
 	lastSessionFile: "",
-	isolate: true,
+	isolate: false,
 	inherit: DEFAULT_INHERITANCE,
 	rememberedPackages: {},
 	adoptedLegacyPanels: [],
@@ -119,7 +119,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Keep the panel's pi separate from your terminal pi")
-			.setDesc("The panel's pi uses a config folder of its own (~/.pi/harness) and takes from your terminal pi (~/.pi/agent) only what is switched on below. What this vault has in its own .pi folder is not inheritance and loads either way, once you have trusted the vault in pi. Off: the panel uses ~/.pi/agent as it is, with everything in it. Reload pi after changing anything here.")
+			.setDesc("Off by default: the panel shares your terminal pi's ~/.pi/agent profile. Turn on to use ~/.pi/harness and choose what to inherit below. The vault's own .pi folder loads either way once you have trusted it in pi. Reload pi after changing anything here.")
 			.addToggle((t) =>
 				t.setValue(s.isolate).onChange(async (v) => {
 					s.isolate = v;

@@ -9,6 +9,7 @@
 //   env -i HOME="$HOME" SHELL="$SHELL" PATH=/usr/bin:/bin "$(which node)" scripts/rpc-smoke.mjs
 
 import esbuild from "esbuild";
+import { spawn } from "child_process";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { dirname, join, resolve } from "path";
@@ -23,6 +24,9 @@ writeFileSync(
 	entry,
 	`export { PiRpcClient } from ${JSON.stringify(join(root, "src/rpc/PiRpcClient.ts"))};
 export { resolveEnv } from ${JSON.stringify(join(root, "src/env.ts"))};
+export { sharedPiEnvironment } from ${JSON.stringify(join(root, "src/piEnvironment.ts"))};
+export { environmentForShell } from ${JSON.stringify(join(root, "pi-extension/panel-shell.ts"))};
+export { DEFAULT_SETTINGS } from ${JSON.stringify(join(root, "src/settings.ts"))};
 export { listSessions } from ${JSON.stringify(join(root, "src/sessions.ts"))};
 export { splitHeader, splitPreviews, parseOptions, parseMultiSelect } from ${JSON.stringify(join(root, "src/view/InlineDialogs.ts"))};
 export { Requirements, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS } from ${JSON.stringify(join(root, "src/requirements.ts"))};
@@ -31,7 +35,7 @@ export { tasksFrom } from ${JSON.stringify(join(root, "src/view/TodoPanel.ts"))}
 export { TOOL_RENDERERS } from ${JSON.stringify(join(root, "src/view/toolRenderers.ts"))};
 export { summarize } from ${JSON.stringify(join(root, "src/view/TabSwitcher.ts"))};
 export { extractBundledFiles } from ${JSON.stringify(join(root, "src/bundled.ts"))};
-export { prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/agentDir.ts"))};
+export { USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/agentDir.ts"))};
 export { disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } from ${JSON.stringify(join(root, "src/packages.ts"))};
 export { scopeModels } from ${JSON.stringify(join(root, "src/models.ts"))};
 export { savedTabsFrom, panelsIn } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};
@@ -50,14 +54,15 @@ const obsidianStub = {
 	name: "obsidian-stub",
 	setup(build) {
 		build.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "stub" }));
+		build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: "pi", namespace: "stub" }));
 		build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
-			contents: "export class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');\nexport const getAllTags = () => [];",
+			contents: "export class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport class PluginSettingTab {}\nexport class Setting {}\nexport const createBashTool = () => {};\nexport const createLocalBashOperations = () => {};\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');\nexport const getAllTags = () => [];",
 		}));
 	},
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, rewordMessage, withContext, SearchIndex, trimToolOutput } =
+const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, rewordMessage, withContext, SearchIndex, trimToolOutput } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -65,6 +70,21 @@ const check = (ok, label, detail = "") => {
 	console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? `  (${detail})` : ""}`);
 	if (!ok) process.exitCode = 1;
 };
+
+// ---- shared and isolated profile environments, including an app launched from Pi's shell
+{
+	check(DEFAULT_SETTINGS.isolate === false, "a new panel shares the terminal Pi profile unless isolation is explicitly enabled");
+	check(USER_AGENT_DIR === join(homedir(), ".pi/agent") && HARNESS_AGENT_DIR === join(homedir(), ".pi/harness"), "the inheritance source remains ~/.pi/agent even if the app inherited a profile override");
+	const inherited = { PATH: "/bin", PI_CODING_AGENT_DIR: "/tmp/stale-profile", PI_MCP_CONFIG_MODE: "exclusive", PI_HARNESS_PI: "custom-pi", PI_SESSION_ID: "parent-session", HOME: "/tmp/home" };
+	const shared = sharedPiEnvironment(inherited);
+	check(!("PI_CODING_AGENT_DIR" in shared) && !("PI_MCP_CONFIG_MODE" in shared) && !("PI_HARNESS_PI" in shared) && shared.HOME === inherited.HOME && inherited.PI_CODING_AGENT_DIR === "/tmp/stale-profile", "shared mode drops inherited profile overrides without changing the parent environment");
+	const isolated = { ...shared, PI_CODING_AGENT_DIR: "/tmp/isolated-profile", PI_MCP_CONFIG_MODE: "exclusive", PI_HARNESS_PI: "custom-pi" };
+	check(isolated.PI_CODING_AGENT_DIR === "/tmp/isolated-profile" && isolated.PI_MCP_CONFIG_MODE === "exclusive", "explicit isolation can set a profile and MCP policy on the Pi child");
+	const launchedApp = environmentForShell(isolated);
+	check(!("PI_CODING_AGENT_DIR" in launchedApp) && !("PI_MCP_CONFIG_MODE" in launchedApp) && !("PI_HARNESS_PI" in launchedApp) && !("PI_SESSION_ID" in launchedApp) && isolated.PI_CODING_AGENT_DIR === "/tmp/isolated-profile" && launchedApp.PATH === "/bin", "shell to open to launched app: panel overrides do not escape; isolated Pi keeps its own environment");
+	const deliberateChild = { ...launchedApp, PI_CODING_AGENT_DIR: isolated.PI_CODING_AGENT_DIR };
+	check(deliberateChild.PI_CODING_AGENT_DIR === isolated.PI_CODING_AGENT_DIR, "a deliberately isolated Pi child can still opt into the profile");
+}
 
 // ---- session titles, from hand-written files (no pi needed)
 {
@@ -580,12 +600,43 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 	let isolatedExit = null;
 	isolated.onExit((info) => (isolatedExit = info));
 	// With the plugin's own extensions loaded the way the panel loads them.
-	const extensions = ["browser", "obsidian", "trim-tool-output"].flatMap((name) => ["-e", join(root, "pi-extension", `${name}.ts`)]);
+	const extensions = ["browser", "obsidian", "trim-tool-output", "panel-shell"].flatMap((name) => ["-e", join(root, "pi-extension", `${name}.ts`)]);
 	await isolated.start({ binary: "pi", args: ["--no-session", "--no-skills", ...extensions], cwd: work, env: { ...env, PI_CODING_AGENT_DIR: isolatedDir } });
 	const theirs = await isolated.getCommands();
 	const usable = await isolated.getAvailableModels();
 	await isolated.stop();
-	check(isolatedExit && !/error|failed/i.test(isolatedExit.stderr), "the plugin's browser, obsidian and trim-tool-output extensions load without complaint", isolatedExit?.stderr.slice(0, 200));
+	check(isolatedExit && !/error|failed/i.test(isolatedExit.stderr), "the panel's Pi extensions, including the shell boundary, load without complaint", isolatedExit?.stderr.slice(0, 200));
+	// RPC's `bash` command exercises the !/!! path without a model call. A child process
+	// stands in for `open` and the app it launches; it must not receive Pi's profile.
+	const shellResult = await new Promise((resolveResult, rejectResult) => {
+		const child = spawn("pi", ["--mode", "rpc", "--no-session", "--no-skills", "-e", join(root, "pi-extension/panel-shell.ts")], {
+			cwd: work,
+			env: { ...env, PI_CODING_AGENT_DIR: isolatedDir, PI_MCP_CONFIG_MODE: "exclusive", PI_HARNESS_PI: "pi" },
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		const timeout = setTimeout(() => child.kill(), 15000);
+		let output = "";
+		child.stdout.on("data", (chunk) => {
+			output += chunk.toString();
+			let end;
+			while ((end = output.indexOf("\n")) !== -1) {
+				const line = output.slice(0, end);
+				output = output.slice(end + 1);
+				let response;
+				try { response = JSON.parse(line); } catch { continue; }
+				if (response.id !== "env-check" || response.type !== "response") continue;
+				clearTimeout(timeout);
+				child.kill();
+				resolveResult(response);
+			}
+		});
+		child.on("error", rejectResult);
+		child.on("exit", () => { clearTimeout(timeout); rejectResult(new Error("Pi exited before its shell check responded")); });
+		const command = `node -p 'JSON.stringify({profile:process.env.PI_CODING_AGENT_DIR,mcp:process.env.PI_MCP_CONFIG_MODE,binary:process.env.PI_HARNESS_PI,session:process.env.PI_SESSION_ID})'`;
+		child.stdin.write(JSON.stringify({ id: "env-check", type: "bash", command }) + "\n");
+	});
+	const shellEnv = JSON.parse(shellResult.data?.output?.trim() ?? "{}");
+	check(shellResult.success && Object.keys(shellEnv).length === 0, "RPC user bash does not leak the isolated profile to an app it launches", JSON.stringify(shellEnv));
 	check(usable.length > 0, "isolated pi: the linked credentials give it models to use", `${usable.length} models`);
 	// pi ships a few extensions of its own inline (llama.cpp); those aren't the user's.
 	const builtIn = (c) => (c.sourceInfo?.path ?? "").startsWith("<inline:");

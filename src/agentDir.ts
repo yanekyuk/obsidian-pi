@@ -11,7 +11,9 @@ import { dirname, join, resolve } from "path";
 //   seeded   settings.json: default model and the like, once. Never the package list.
 //   carried  trust.json: whether this vault's own .pi folder is trusted
 // Sessions, skills and MCP servers are inherited through pi's flags instead; see main.ts.
-export const USER_AGENT_DIR = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+// The terminal profile is a location, not the Obsidian process's inherited override.
+// In particular, a stale harness override must never become the source for inheritance.
+export const USER_AGENT_DIR = join(homedir(), ".pi", "agent");
 export const HARNESS_AGENT_DIR = join(homedir(), ".pi", "harness");
 
 export interface Inheritance {

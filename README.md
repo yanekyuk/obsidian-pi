@@ -13,7 +13,7 @@ This plugin puts a coding agent in your vault. Read this first.
 - **Network use.** pi talks to your model provider and to whatever its tools reach (web search and fetch, MCP servers). The plugin also sends a local MCP `initialize` request to HTTP servers listed in the vault's `.mcp.json`, only to warn you when one is down.
 - **Third-party Pi packages are manual.** The panel works best with six extensions from rpiv, `pi-mcp-adapter`, and Steph Ango's Obsidian skills. Pi Harness reports when they are missing, but never installs, removes, or updates Pi or its packages. Review and manage them yourself in a terminal.
 - **The web viewer, only if you switch it on.** pi can then open, read and operate pages in Obsidian's web viewer, where you may be logged in to sites. See [Web viewer](#web-viewer).
-- **Files outside the vault.** The panel's pi keeps its config in `~/.pi/harness`, with links to your pi logins in `~/.pi/agent`. pi keeps sessions under `~/.pi/agent/sessions`; "Move to trash" in the session list moves such a file to the system trash. Choosing an advisor model writes `~/.config/rpiv-advisor/advisor.json`. To find `pi` when Obsidian was started from the Dock, the plugin asks your login shell for its `PATH`.
+- **Files outside the vault.** By default the panel uses your existing `~/.pi/agent` config; if you opt into separation it uses `~/.pi/harness`, with optional links to your pi logins in `~/.pi/agent`. pi keeps sessions under `~/.pi/agent/sessions` by default; "Move to trash" in the session list moves such a file to the system trash. Choosing an advisor model writes `~/.config/rpiv-advisor/advisor.json`. To find `pi` when Obsidian was started from the Dock, the plugin asks your login shell for its `PATH`.
 
 ## What it does
 
@@ -124,7 +124,7 @@ How it works, for these and the Obsidian tools above: each set is a small pi ext
 
 ## Separate from your terminal pi
 
-The panel's pi has a config folder of its own, `~/.pi/harness`, so what you set up for pi in the terminal stays out of your vault unless you want it there. Pi Harness does not populate or update that profile. What crosses over from `~/.pi/agent` is decided under **Settings → Inheritance**, one switch each:
+By default, the panel uses the same `~/.pi/agent` profile as terminal pi: logins, packages, skills and settings load as usual. To keep the panel separate, turn on **Settings → Inheritance → Keep the panel's pi separate**. It then uses `~/.pi/harness`; what crosses over from `~/.pi/agent` is decided by the switches below. Existing settings with separation already enabled remain enabled until you turn it off. The plugin does not delete existing profile data when you switch modes.
 
 | Switch | Default | What it does |
 | --- | --- | --- |
@@ -150,7 +150,7 @@ pi install -l npm:pi-claude-oauth-adapter
 
 Logins that depend on a provider package (the credentials are in `auth.json`, but the provider comes from a package) only show up in the panel once that package is installed this way.
 
-Turn **Keep the panel's pi separate** off to have the panel use `~/.pi/agent` as it is, like the terminal does.
+The panel sets its profile only for Pi processes it starts. Shell commands run by the panel's Pi do not inherit its profile, MCP override, binary override or Pi session metadata, so launching another app from a shell command does not make that app use the panel's config. To start a separate Pi from such a command, set `PI_CODING_AGENT_DIR` explicitly for that child. Extensions that launch their own processes can still pass on their own environment. Fully quit apps previously launched with a contaminated environment before reopening them from a clean launcher.
 
 ## pi extensions the panel is built around
 
