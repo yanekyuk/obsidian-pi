@@ -11,7 +11,7 @@ This plugin puts a coding agent in your vault. Read this first.
 - **pi acts without asking.** It can run shell commands and read, change or delete any file your user account can, in the vault and outside it. That is how pi works in a terminal too; the plugin adds no confirmation step. Text pi reads (a note, a web page it fetched) can contain instructions that steer it, so treat it like any other program you give your shell to. For a read-only agent, put `--tools read,grep,find,ls` in Settings → Extra arguments. Keep backups of your vault.
 - **Your notes leave your machine.** Whatever pi reads, plus the active note and selection when the note chip is on, is sent to the model provider you configured in pi. Pi Harness has no telemetry and does not send note content independently of pi.
 - **Network use.** pi talks to your model provider and to whatever its tools reach (web search and fetch, MCP servers). The plugin also sends a local MCP `initialize` request to HTTP servers listed in the vault's `.mcp.json`, only to warn you when one is down.
-- **Third-party Pi packages are manual.** The panel works best with six extensions from rpiv, `pi-mcp-adapter`, and Steph Ango's Obsidian skills. Pi Harness reports when they are missing, but never installs, removes, or updates Pi or its packages. Review and manage them yourself in a terminal.
+- **Third-party Pi packages are manual.** The panel works best with six extensions from rpiv and Steph Ango's Obsidian skills. Pi Harness reports when they are missing, but never installs, removes, or updates Pi or its packages. Review and manage them yourself in a terminal. Pi v1.0.0 supports MCP servers without an adapter.
 - **The web viewer, only if you switch it on.** pi can then open, read and operate pages in Obsidian's web viewer, where you may be logged in to sites. See [Web viewer](#web-viewer).
 - **Files outside the vault.** By default the panel uses your existing `~/.pi/agent` config; if you opt into separation it uses `~/.pi/harness`, with optional links to your pi logins in `~/.pi/agent`. pi keeps sessions under `~/.pi/agent/sessions` by default; "Move to trash" in the session list moves such a file to the system trash. Choosing an advisor model writes `~/.config/rpiv-advisor/advisor.json`. To find `pi` when Obsidian was started from the Dock, the plugin asks your login shell for its `PATH`.
 
@@ -30,9 +30,9 @@ This plugin puts a coding agent in your vault. Read this first.
 - Switch model and thinking level from the composer. The model picker works like pi's own: it opens on your scoped models (`enabledModels` in pi's settings) with all models a click or Tab away, and remembers which view you used. A scoped model pi can't use right now is listed as not available, which usually means its provider comes from a package that isn't installed for the panel's pi. The context reading beside them has a compact button; `/compact` does the same, and `/compact <what to keep>` steers the summary.
 - `/reload`, or the ↻ button (in the toolbar, and on each row of the tab list), reloads extensions, skills, prompt templates, context files and settings without losing the conversation. pi's own `/reload` exists only in its terminal UI and RPC has no command for it, so the panel restarts pi on the same session, which picks up the same things. It acts on the tab on screen and waits if pi is working there.
 - Questions from pi extensions are answered in a card above the composer, not in a popup. Notifications and widgets show up in the panel too. The footer status text extensions write for pi's terminal ("MCP: 1 server enabled") is left out; the line above the composer only says what pi is doing.
-- Connects the vault's MCP servers when pi starts. pi's MCP adapter is lazy, so a fresh pi lists them as "disconnected (0 tools)" until something uses one; the panel runs `/mcp reconnect <name>` for each HTTP server in the vault's `.mcp.json` that is up. Turn it off under Settings → Extensions.
+- With the legacy `pi-mcp-adapter` installed, connects the vault's HTTP MCP servers when pi starts. The adapter is lazy, so a fresh pi lists them as "disconnected (0 tools)" until something uses one; the panel runs `/mcp reconnect <name>` for each server in the vault's `.mcp.json` that is up. Turn it off under Settings → Extensions. Pi's built-in MCP connects servers configured in `.pi/mcp.json` itself.
 - Output from extension commands (`/mcp`, `/todos`) appears in the transcript under the command you typed, instead of in a toast. Only short one-line remarks stay toasts. This output is not part of the session, so it is gone after a reload.
-- Warns when an HTTP MCP server in the vault's `.mcp.json` is unavailable, such as the one from the Vault as MCP plugin. pi's MCP adapter connects lazily and reports "enabled" either way, so the panel sends each server a real MCP `initialize` when pi starts and at most every 30 seconds as runs begin. Click the warning to check again.
+- Warns when an HTTP MCP server in the vault's legacy `.mcp.json` is unavailable, such as the one from the Vault as MCP plugin. The panel sends each server a real MCP `initialize` when pi starts and at most every 30 seconds as runs begin. Click the warning to check again. For native MCP servers in `.pi/mcp.json`, use `/mcp` to inspect connections.
 
 ## Sessions
 
@@ -133,8 +133,8 @@ By default, the panel uses the same `~/.pi/agent` profile as terminal pi: logins
 | Default model and settings | on | Copies default provider, model and thinking level, enabled models, compaction and shell prefix, once. Never the package list. After that the panel's pi keeps its own settings. |
 | Session history | on | Keeps the vault's sessions in the folder your terminal pi uses, so the history is one list. |
 | Vault trust | on | Carries your decision to trust this vault (or a folder above it) in pi. |
-| MCP logins | on | Links `mcp-oauth/`, the logins of MCP servers that use OAuth. |
-| MCP servers | off | Servers from your global MCP files (`~/.config/mcp/mcp.json`, `~/.agents/mcp.json`, pi's own `mcp.json`). Off, pi's MCP adapter reads the vault's `.mcp.json` and nothing else. |
+| MCP logins | on | Links `mcp-oauth/` for the legacy adapter. Pi's native MCP keeps OAuth tokens in `mcp-auth.json`, which is not shared with a separate profile. |
+| MCP servers | off | Controls the legacy adapter's global MCP files (`~/.config/mcp/mcp.json`, `~/.agents/mcp.json`, pi's own `mcp.json`). Off, the adapter reads only the vault's `.mcp.json`. Pi's native MCP reads `.pi/mcp.json` in the vault and `mcp.json` in its own profile; a separate profile does not inherit the terminal pi's `mcp.json`. |
 | Skills | off | Skills in `~/.agents/skills` and `~/.pi/agent/skills`. pi finds the first of these whatever its config folder is, so the panel names the skills pi may load (installed packages, the vault's `.pi/skills` and `.agents/skills`, the folders in the plugin settings) instead of letting it look. |
 | Local extensions | off | Links `extensions/`. |
 | Subagents | off | Links `agents/`, for an extension that uses them. |
@@ -154,7 +154,7 @@ The panel sets its profile only for Pi processes it starts. Shell commands run b
 
 ## pi extensions the panel is built around
 
-The panel is built around six extensions from [rpiv](https://github.com/juicesharp/rpiv-mono). [pi-mcp-adapter](https://www.npmjs.com/package/pi-mcp-adapter) makes pi read a vault's `.mcp.json` and provides `/mcp`. Pi Harness runs `pi list` to identify missing packages, but it never installs, removes, or updates them. A copy installed from a local folder or git counts as installed. Without these packages pi still works; the panel just has fewer integrations.
+The panel is built around six extensions from [rpiv](https://github.com/juicesharp/rpiv-mono). Pi v1.0.0 includes MCP support and `/mcp` without a package: configure servers in the vault's `.pi/mcp.json` (after trusting the vault in pi) or in your pi profile's `mcp.json`. The older `pi-mcp-adapter` is only needed if you still use its `.mcp.json` configuration; it replaces pi's built-in MCP while installed. Pi Harness runs `pi list` to identify missing recommended packages, but it never installs, removes, or updates them. A copy installed from a local folder or git counts as installed. Without the recommended packages pi still works; the panel just has fewer integrations.
 
 For the full set of integrations, open a terminal in the vault root, review the sources, and run:
 
@@ -165,7 +165,6 @@ pi install -l npm:@juicesharp/rpiv-ask-user-question
 pi install -l npm:@juicesharp/rpiv-btw
 pi install -l npm:@juicesharp/rpiv-todo
 pi install -l npm:@juicesharp/rpiv-web-tools
-pi install -l npm:pi-mcp-adapter
 pi install -l git:github.com/kepano/obsidian-skills
 ```
 

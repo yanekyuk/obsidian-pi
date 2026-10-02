@@ -5,11 +5,11 @@ import { basename } from "path";
 // same folder name satisfies a requirement; Pi Harness only inspects packages and never
 // installs, removes, or updates them.
 export const MCP_ADAPTER = "pi-mcp-adapter";
-export const REQUIRED_PACKAGES = ["rpiv-advisor", "rpiv-args", "rpiv-ask-user-question", "rpiv-btw", "rpiv-todo", "rpiv-web-tools", MCP_ADAPTER] as const;
+export const REQUIRED_PACKAGES = ["rpiv-advisor", "rpiv-args", "rpiv-ask-user-question", "rpiv-btw", "rpiv-todo", "rpiv-web-tools"] as const;
 export type RequiredPackageName = (typeof REQUIRED_PACKAGES)[number];
 
 const SCOPE = "@juicesharp";
-export const requiredPackageSource = (name: RequiredPackageName): string => (name === MCP_ADAPTER ? `npm:${name}` : `npm:${SCOPE}/${name}`);
+export const requiredPackageSource = (name: RequiredPackageName): string => `npm:${SCOPE}/${name}`;
 
 // Steph Ango's Obsidian skills remain in their own repository. Users install and update
 // them outside Obsidian; the plugin only checks whether Pi has loaded any of them.

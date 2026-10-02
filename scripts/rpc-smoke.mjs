@@ -551,8 +551,9 @@ const check = (ok, label, detail = "") => {
 	check(parsed.length === 3 && parsed[1].source === "git:github.com/x/y", "pi list: sources paired with paths, (filtered) stripped");
 	const found = findRequired(parsed);
 	check(found.get("rpiv-todo")?.source.startsWith("npm:") && found.get("rpiv-web-tools")?.source.startsWith("../") && found.get("rpiv-btw") === null, "requirements: a local checkout counts as installed; absent ones are missing");
-	const commands = manualInstallCommands(["rpiv-todo", "pi-mcp-adapter"], true);
-	check(commands.join("\n") === "pi install -l npm:@juicesharp/rpiv-todo\npi install -l npm:pi-mcp-adapter\npi install -l git:github.com/kepano/obsidian-skills", "requirements: manual setup commands target this vault and use the canonical sources");
+	check(!REQUIRED_PACKAGES.includes("pi-mcp-adapter") && !found.has("pi-mcp-adapter"), "requirements: native MCP does not require an adapter package");
+	const commands = manualInstallCommands(["rpiv-todo"], true);
+	check(commands.join("\n") === "pi install -l npm:@juicesharp/rpiv-todo\npi install -l git:github.com/kepano/obsidian-skills", "requirements: manual setup commands target this vault and use the canonical sources");
 	check(!["ensure", "install", "remove", "update", "installSkills"].some((name) => name in Requirements.prototype), "requirements: package access is inspection-only");
 }
 
@@ -638,8 +639,8 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 	const shellEnv = JSON.parse(shellResult.data?.output?.trim() ?? "{}");
 	check(shellResult.success && Object.keys(shellEnv).length === 0, "RPC user bash does not leak the isolated profile to an app it launches", JSON.stringify(shellEnv));
 	check(usable.length > 0, "isolated pi: the linked credentials give it models to use", `${usable.length} models`);
-	// pi ships a few extensions of its own inline (llama.cpp); those aren't the user's.
-	const builtIn = (c) => (c.sourceInfo?.path ?? "").startsWith("<inline:");
+	// Pi's own commands (llama.cpp and, in v1.0.0, MCP) aren't the user's extensions.
+	const builtIn = (c) => c.sourceInfo?.source === "builtin" || (c.sourceInfo?.path ?? "").startsWith("<inline:");
 	check(theirs.filter((c) => (c.source === "extension" || c.source === "skill") && !builtIn(c)).length === 0, "isolated pi: none of the user's extensions or skills are loaded", `${commands.filter((c) => c.source === "extension").length} extension commands in the user's own pi`);
 }
 

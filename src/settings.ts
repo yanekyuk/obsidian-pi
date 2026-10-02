@@ -134,8 +134,8 @@ export class PiAgentSettingTab extends PluginSettingTab {
 			["settings", "Default model and settings", "Default provider, model and thinking level, enabled models, compaction and shell prefix, copied once. Never the package list."],
 			["sessions", "Session history", "Keep this vault's sessions where your terminal pi keeps them, so the history is one list."],
 			["trust", "Vault trust", "Your decision in pi to trust this vault, which is what lets the vault's own .pi folder load."],
-			["mcpLogins", "MCP logins", "OAuth logins for MCP servers."],
-			["mcpServers", "MCP servers", "Servers from your global MCP files (~/.config/mcp/mcp.json, ~/.agents/mcp.json and pi's own). Off: only the vault's .mcp.json counts."],
+			["mcpLogins", "Legacy MCP logins", "Links mcp-oauth/ for pi-mcp-adapter. Native MCP tokens in mcp-auth.json are not shared with a separate profile."],
+			["mcpServers", "Legacy MCP servers", "For pi-mcp-adapter: include global MCP files, or use only the vault's .mcp.json when off. Native MCP reads the vault's .pi/mcp.json and this pi profile's mcp.json instead."],
 			["skills", "Skills", "Skills in ~/.agents/skills and ~/.pi/agent/skills."],
 			["extensions", "Local extensions", "Extensions in ~/.pi/agent/extensions. Packages you installed with pi install are not inherited one by one: install the ones you want in the vault's .pi folder (pi install -l), or switch the separation off."],
 			["agents", "Subagents", "Subagent definitions in ~/.pi/agent/agents, for an extension that uses them."],
@@ -193,8 +193,8 @@ export class PiAgentSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("Connect the vault's MCP servers when pi starts")
-			.setDesc("pi's MCP adapter only connects to a server when something first uses it, so a new pi reports the vault's servers as disconnected with no tools. With this on, the HTTP servers in the vault's .mcp.json that are up (such as Vault as MCP) are connected right away.")
+			.setName("Connect legacy MCP servers when pi starts")
+			.setDesc("For pi-mcp-adapter and the vault's .mcp.json: connects available HTTP servers right away rather than waiting until something uses them. Pi's native MCP connects servers from .pi/mcp.json itself.")
 			.addToggle((t) =>
 				t.setValue(s.connectMcpOnStart).onChange(async (v) => {
 					s.connectMcpOnStart = v;
