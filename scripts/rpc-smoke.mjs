@@ -38,6 +38,8 @@ export { extractBundledFiles } from ${JSON.stringify(join(root, "src/bundled.ts"
 export { USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/agentDir.ts"))};
 export { disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } from ${JSON.stringify(join(root, "src/packages.ts"))};
 export { scopeModels } from ${JSON.stringify(join(root, "src/models.ts"))};
+export { suggestLineup, makerOf, sharedMakers } from ${JSON.stringify(join(root, "src/a2a/lineup.ts"))};
+export { runDiscussion, discussionMarkdown } from ${JSON.stringify(join(root, "pi-extension/a2a/discussion.ts"))};
 export { savedTabsFrom, panelsIn } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};
 export { splitTitle, markdownOf } from ${JSON.stringify(join(root, "src/view/writeBack.ts"))};
 export { commandAllowed } from ${JSON.stringify(join(root, "src/obsidianControl.ts"))};
@@ -62,7 +64,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, rewordMessage, withContext, SearchIndex, trimToolOutput } =
+const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, suggestLineup, makerOf, sharedMakers, runDiscussion, discussionMarkdown, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, rewordMessage, withContext, SearchIndex, trimToolOutput } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -257,6 +259,61 @@ const check = (ok, label, detail = "") => {
 	check(ids(scopeModels(["*sonnet*", "OPENAI-CODEX/*"], available)) === "claude-sonnet-5,claude-sonnet-5-20260301,gpt-5.6-sol,gpt-5.6-luna", "scoped models: globs match the id or provider/id, case-insensitively");
 	check(ids(scopeModels(["sonnet", "sonnet"], available)) === "claude-sonnet-5", "scoped models: a partial name stands for one model, and nothing is listed twice");
 	check(scopeModels([], available).models.length === 0 && scopeModels(["a.b"], [m("x", "aXb")]).models.length === 0, "scoped models: no patterns, no scope; a dot is a dot");
+}
+
+// ---- A2A discussions: the automatic lineup, and the order and memory of a discussion
+{
+	const m = (provider, id) => ({ provider, id, name: id });
+	const [fable, opus, sol, astra, k3, gemini, orClaude, orGrok] = [m("anthropic", "claude-fable-5-1"), m("anthropic", "claude-opus-5"), m("openai-codex", "gpt-5.6-sol"), m("openai-codex", "gpt-6-astra"), m("kimi-coding", "k3"), m("google", "gemini-3.1-pro-preview"), m("openrouter", "~anthropic/claude-opus-latest"), m("openrouter", "~x-ai/grok-latest")];
+	const available = [fable, opus, sol, astra, k3, gemini, orClaude, orGrok];
+	const keys = (l) => ["debaterA", "debaterB", "referee"].map((r) => (l[r] ? `${l[r].provider}/${l[r].id}` : "-")).join(" | ");
+	check([fable, sol, k3, gemini, orClaude, orGrok].map(makerOf).join() === "Anthropic,OpenAI,Moonshot,Google,Anthropic,xAI", "a2a lineup: the maker comes from the model id, so a reseller's Claude is still Anthropic");
+
+	const usual = suggestLineup({ available, scoped: [fable, opus, sol, k3, astra], current: sol, advisor: "openai-codex/gpt-6-astra" });
+	check(keys(usual) === "anthropic/claude-fable-5-1 | kimi-coding/k3 | openai-codex/gpt-6-astra", "a2a lineup: the advisor referees; debaters come from the scoped list, each from another maker", keys(usual));
+	const noAdvisor = suggestLineup({ available, scoped: [opus, orClaude, gemini], current: null, advisor: undefined });
+	check(keys(noAdvisor) === "anthropic/claude-opus-5 | google/gemini-3.1-pro-preview | openai-codex/gpt-5.6-sol", "a2a lineup: without an advisor, a third maker is found among all models", keys(noAdvisor));
+	check(sharedMakers(usual).length === 0, "a2a lineup: three makers, nothing to point out");
+	const twoMakers = suggestLineup({ available: [fable, opus, sol], scoped: [], current: null, advisor: undefined });
+	check(keys(twoMakers) === "anthropic/claude-fable-5-1 | openai-codex/gpt-5.6-sol | anthropic/claude-opus-5" && sharedMakers(twoMakers)[0]?.roles.join() === "debaterA,referee", "a2a lineup: with two makers every role still gets a model, and the shared maker is reported", keys(twoMakers));
+	check(keys(suggestLineup({ available: [], scoped: [], current: null, advisor: "x/y" })) === "- | - | -", "a2a lineup: no models, no lineup");
+
+	const plan = { topic: "Tabs or spaces?", stanceA: "Tabs", stanceB: "Spaces", context: "A Go codebase.", rounds: 2, models: { debaterA: "a/1", debaterB: "b/1", referee: "c/1" } };
+	const asked = [];
+	const speaker = (failAt) => async (request, onProgress) => {
+		asked.push(request);
+		if (asked.length === failAt) throw new Error("rate limited");
+		onProgress({ search: `${request.role} query` });
+		onProgress({ text: "partial" });
+		return request.role === "referee" ? `Checked (${asked.length}). **Weak**: the tabs claim.` : `${request.role} argues (${asked.length}).`;
+	};
+	const updates = [];
+	const done = await runDiscussion(plan, speaker(0), (d) => updates.push(d.turns.length));
+	const order = done.turns.map((t) => `${t.round}${t.role[0]}${t.role.endsWith("A") ? "A" : t.role.endsWith("B") ? "B" : ""}`).join(" ");
+	check(done.status === "done" && order === "1dA 1dB 1r 2dA 2dB 2r", "a2a discussion: each round A argues, B answers, the referee checks", order);
+	check(asked.every((r) => r.model === plan.models[r.role]) && asked[0].systemPrompt.includes("Your stance: Tabs") && asked[1].systemPrompt.includes("Your stance: Spaces"), "a2a discussion: each agent gets its own model and stance");
+	check(asked[2].systemPrompt.includes("do not say who is winning") && !asked[2].prompt.includes("## Assessment") && asked[5].prompt.includes("## Assessment"), "a2a discussion: the referee takes no side, and sums up only in the last round");
+	const debater = asked[0].systemPrompt;
+	check(debater.includes("unconventional") && debater.includes("no hybrid or middle-ground proposal") && debater.includes("Concede a point only when evidence or reasoning forces it") && debater.includes("Don't defend a claim the referee showed to be false"), "a2a discussion: debaters commit to their thesis without softening it, yet concede what is shown false");
+	check(asked[2].systemPrompt.includes("is not a defect") && asked[2].systemPrompt.includes("Point out hedging") && asked[2].systemPrompt.includes("Never propose a compromise") && asked[5].prompt.includes("leave the disagreement standing"), "a2a discussion: the referee judges soundness, not conventionality, and brokers no compromise");
+	check(debater.includes("Cite only pages that your searches returned or that you fetched") && asked[0].prompt.includes("search for evidence, then make your opening argument") && asked[3].prompt.includes("strongest form that survived the checks") && asked[4].prompt.includes("strongest form") && !asked[1].prompt.includes("strongest form"), "a2a discussion: debaters search before arguing, cite only what they found, and close without backing off");
+	check(asked[3].prompt.includes("Checked (3). **Weak**") && asked[3].prompt.includes("A Go codebase.") && !asked[0].prompt.includes("The discussion so far"), "a2a discussion: debaters see the context and the referee's checks from earlier rounds");
+	check(done.turns[0].searches.join() === "debaterA query" && done.turns[0].text === "debaterA argues (1)." && updates.length > 6, "a2a discussion: searches and streamed text are recorded and reported as they come");
+	const markdown = discussionMarkdown(done);
+	check(markdown.startsWith("# A2A discussion: Tabs or spaces?") && markdown.includes("## Round 2 · Referee (c/1)") && !markdown.includes("stopped early"), "a2a discussion: the main agent gets the whole transcript");
+
+	asked.length = 0;
+	const failed = await runDiscussion(plan, speaker(2), () => {});
+	check(failed.status === "failed" && failed.turns.length === 2 && failed.turns[1].error === "rate limited" && discussionMarkdown(failed).includes("Debater B (b/1) failed in round 1: rate limited"), "a2a discussion: a failed turn ends it, keeps what was said and says why");
+	const stop = new AbortController();
+	stop.abort();
+	const stopped = await runDiscussion(plan, speaker(0), () => {}, stop.signal).then(() => "ran", (err) => err.message);
+	check(stopped.includes("stopped"), "a2a discussion: a stopped discussion is an error, not a result", stopped);
+
+	const card = TOOL_RENDERERS.a2a_discussion;
+	const running = { status: "running", plan, turns: [{ round: 2, role: "referee", model: "c/1", status: "speaking", text: "", searches: [] }] };
+	check(card.summary({ topic: "Tabs or spaces?" }) === "Tabs or spaces?" && card.summary({}, { details: running }) === "Tabs or spaces? · round 2 of 2, Referee" && card.summary({ topic: "T" }, { details: { status: "declined", turns: [] } }) === "T · declined", "a2a card: the header follows the discussion");
+	check(card.summary({ topic: "T" }, { content: [{ type: "text", text: "The A2A discussion was stopped." }], details: {} }) === "T" && card.body(null, { details: {} }, null) === false, "a2a card: a stopped discussion, saved with empty details, shows as a plain card instead of breaking the session");
 }
 
 // ---- write-back: a reply becoming a note

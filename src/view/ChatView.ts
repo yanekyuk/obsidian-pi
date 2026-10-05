@@ -152,6 +152,7 @@ export class ChatView extends ItemView {
 		}
 		const advisor = readAdvisorConfig().modelKey;
 		menu.addItem((i) => i.setTitle(advisor ? `Advisor: ${advisor}…` : "Set advisor model…").setIcon("graduation-cap").onClick(() => void tab.configureAdvisor()));
+		if (this.plugin.settings.a2aDiscussions) menu.addItem((i) => i.setTitle("Start A2A discussion…").setIcon("swords").onClick(() => tab.insertText("/a2a ")));
 		menu.addItem((i) => i.setTitle("Compact context").setIcon("fold-vertical").onClick(() => void tab.compact()));
 		menu.addItem((i) => i.setTitle("Export conversation to a note").setIcon("file-output").onClick(() => void tab.exportToNote()));
 		menu.addSeparator();

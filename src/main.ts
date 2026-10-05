@@ -211,6 +211,8 @@ export default class PiAgentPlugin extends Plugin {
 		// The Obsidian CLI skill calls `obsidian`. The plugin's launcher goes last on the PATH, so
 		// a command of that name the user already has wins.
 		if (this.manifest.dir) env.PATH = [env.PATH, join(this.vaultPath, this.manifest.dir, "bin")].filter(Boolean).join(delimiter);
+		// For the plugin's pi extensions that run pi themselves: the agents of an A2A discussion.
+		env.PI_HARNESS_PI = this.settings.piPath;
 		if (this.settings.isolate) {
 			env.PI_CODING_AGENT_DIR = await prepareAgentDir(this.vaultPath, this.settings.inherit);
 			// pi's MCP adapter reads global files outside any pi folder. In this mode it reads one
@@ -358,6 +360,7 @@ export default class PiAgentPlugin extends Plugin {
 		if (s.browserControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "browser.ts"));
 		if (s.obsidianControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "obsidian.ts"));
 		if (s.trimToolOutput && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "trim-tool-output.ts"));
+		if (s.a2aDiscussions && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "a2a", "index.ts"));
 
 		// Naive split is enough for flags; quote-aware parsing isn't worth it here.
 		args.push(...s.extraArgs.split(/\s+/).filter(Boolean));

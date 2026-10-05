@@ -31,6 +31,8 @@ export interface PiAgentSettings {
 	commandAllowlist: string;
 	// Send the model stand-ins for bulky tool output from older turns (pi-extension/trim-tool-output.ts).
 	trimToolOutput: boolean;
+	// pi's a2a_discussion tool and /a2a command (pi-extension/a2a).
+	a2aDiscussions: boolean;
 	// The model picker's last view: all models, or pi's scoped list (enabledModels).
 	showAllModels: boolean;
 }
@@ -56,6 +58,7 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	obsidianControl: true,
 	commandAllowlist: "",
 	trimToolOutput: true,
+	a2aDiscussions: true,
 	showAllModels: false,
 };
 
@@ -191,6 +194,16 @@ export class PiAgentSettingTab extends PluginSettingTab {
 					await save();
 				});
 			});
+
+		new Setting(containerEl)
+			.setName("Let pi hold A2A discussions")
+			.setDesc("Lets pi propose a discussion between two agents from different providers who argue opposite stances on a question, while a referee from a third provider checks whether their arguments make sense. You choose the models and start it, or decline; /a2a <question> asks for one. The agents search the web with rpiv-web-tools, and their model calls cost what they cost. Reload pi after changing this.")
+			.addToggle((t) =>
+				t.setValue(s.a2aDiscussions).onChange(async (v) => {
+					s.a2aDiscussions = v;
+					await save();
+				}),
+			);
 
 		new Setting(containerEl)
 			.setName("Connect legacy MCP servers when pi starts")

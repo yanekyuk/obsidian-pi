@@ -10,7 +10,7 @@ This plugin puts a coding agent in your vault. Read this first.
 
 - **pi acts without asking.** It can run shell commands and read, change or delete any file your user account can, in the vault and outside it. That is how pi works in a terminal too; the plugin adds no confirmation step. Text pi reads (a note, a web page it fetched) can contain instructions that steer it, so treat it like any other program you give your shell to. For a read-only agent, put `--tools read,grep,find,ls` in Settings → Extra arguments. Keep backups of your vault.
 - **Your notes leave your machine.** Whatever pi reads, plus the active note and selection when the note chip is on, is sent to the model provider you configured in pi. Pi Harness has no telemetry and does not send note content independently of pi.
-- **Network use.** pi talks to your model provider and to whatever its tools reach (web search and fetch, MCP servers). The plugin also sends a local MCP `initialize` request to HTTP servers listed in the vault's `.mcp.json`, only to warn you when one is down.
+- **Network use.** pi talks to your model provider and to whatever its tools reach (web search and fetch, MCP servers). The plugin also sends a local MCP `initialize` request to HTTP servers listed in the vault's `.mcp.json`, only to warn you when one is down. An [A2A discussion](#a2a-discussions), once you start one, runs three more pi processes whose models may be at other providers you are logged in to; each makes its own model calls and web searches.
 - **Third-party Pi packages are manual.** The panel works best with six extensions from rpiv and Steph Ango's Obsidian skills. Pi Harness reports when they are missing, but never installs, removes, or updates Pi or its packages. Review and manage them yourself in a terminal. Pi v1.0.0 supports MCP servers without an adapter.
 - **The web viewer, only if you switch it on.** pi can then open, read and operate pages in Obsidian's web viewer, where you may be logged in to sites. See [Web viewer](#web-viewer).
 - **Files outside the vault.** By default the panel uses your existing `~/.pi/agent` config; if you opt into separation it uses `~/.pi/harness`, with optional links to your pi logins in `~/.pi/agent`. pi keeps sessions under `~/.pi/agent/sessions` by default; "Move to trash" in the session list moves such a file to the system trash. Choosing an advisor model writes `~/.config/rpiv-advisor/advisor.json`. To find `pi` when Obsidian was started from the Dock, the plugin asks your login shell for its `PATH`.
@@ -105,6 +105,27 @@ The trimmed part grows three turns at a time rather than on every message. A pro
 
 There is no custom compaction: pi's own summary already carries the lists of files read and changed across compactions, and a replacement would lose them.
 
+## A2A discussions
+
+Some questions have two defensible answers, and one model's reply tends to pick one and hide the other. An A2A discussion has two agents argue opposite stances while a referee checks their arguments:
+
+- **Debater A** and **Debater B** each argue one stance, answer each other, and fix or drop an argument the referee found weak.
+- **The referee** takes no side. For each argument it checks the facts, whether a cited source exists and says what is claimed, and whether the reasoning holds, and marks it **Holds**, **Weak** or **Fails**. After the last round it sums up what held up, what failed and what stays open, without naming a winner.
+
+Models like to agree: left alone, two of them drift toward the balanced, generally acceptable answer. So the debaters are told to commit to a sharp thesis and follow it to an unconventional or unpopular conclusion when they can support it, with no "both sides have merit" and no middle-ground proposal. They concede a point only when evidence or reasoning forces it, and then say what it changes. The referee judges soundness, not conventionality: going against the consensus is not a flaw, "most experts disagree" is not a refutation, a mainstream claim needs support too, and a debater who retreats to a vaguer claim is called out. It never proposes a compromise, and where both sides keep arguments that hold, the disagreement stands. pi is told the same when it reports back.
+
+All three can search the web and read pages (`web_search` and `web_fetch` from rpiv-web-tools). The debaters search before they argue and may cite only pages their searches returned or they read. Each round is A, then B, then the referee; you choose one to four rounds.
+
+pi suggests a discussion itself, with its `a2a_discussion` tool, when a question is genuinely contested. You can also ask for one: `/a2a <question>`, or **Start A2A discussion** in the `⋮` menu. pi frames two sharp, opposed theses, giving a serious unconventional position to one side where there is one, and gathers the background the agents need, since they see nothing of the conversation or the vault beyond that. A card above the composer then shows the proposal:
+
+- The question and both stances, which you can edit.
+- A model for each role, chosen automatically so that the three come from different providers. The referee is your advisor model if you set one; the debaters come from the current model and your scoped models, then from all models. Click a model to pick another. Provider means who made the model, so a Claude model through OpenRouter still counts as Anthropic. When you only have models from one or two providers, the card says which roles share one.
+- **Start discussion**, or **Not now**, after which pi carries on without it.
+
+The discussion shows up on the tool card as it happens, with what each agent searched for, and pi gets the whole transcript to answer from. Each turn is a separate one-off pi run with no session file and no tools other than web search and fetch. If a turn fails (a model you have no access to, say) the discussion ends there, and what was said until then is kept. Stopping pi stops the discussion. The agents' token use counts toward the session's cost.
+
+Switch it off under **Settings → Let pi hold A2A discussions**. It is `pi-extension/a2a/`, loaded with `pi -e`.
+
 ## Web viewer
 
 Obsidian can open web pages in a tab (the Web viewer core plugin). With **Settings → Let pi use the web viewer** switched on, pi can drive it, and you watch it happen:
@@ -150,7 +171,7 @@ pi install -l npm:pi-claude-oauth-adapter
 
 Logins that depend on a provider package (the credentials are in `auth.json`, but the provider comes from a package) only show up in the panel once that package is installed this way.
 
-The panel sets its profile only for Pi processes it starts. Shell commands run by the panel's Pi do not inherit its profile, MCP override, binary override or Pi session metadata, so launching another app from a shell command does not make that app use the panel's config. To start a separate Pi from such a command, set `PI_CODING_AGENT_DIR` explicitly for that child. Extensions that launch their own processes can still pass on their own environment. Fully quit apps previously launched with a contaminated environment before reopening them from a clean launcher.
+The panel sets its profile only for Pi processes it starts. Shell commands run by the panel's Pi do not inherit its profile, MCP override, binary override or Pi session metadata, so launching another app from a shell command does not make that app use the panel's config. To start a separate Pi from such a command, set `PI_CODING_AGENT_DIR` explicitly for that child; the panel's own A2A Pi children retain the panel profile. Extensions that launch their own processes can still pass on their own environment. Fully quit apps previously launched with a contaminated environment before reopening them from a clean launcher.
 
 ## pi extensions the panel is built around
 
@@ -180,7 +201,7 @@ These are vault-local installs, so they work whether Pi Harness uses `~/.pi/harn
 | --- | --- |
 | `rpiv-todo` | A live task list pinned above the composer with progress, rebuilt from the session when you reopen it. Each call is a one-line card ("Add tests → in progress"). The clear button hides completed and cancelled tasks from the panel and remembers that per session; the list itself belongs to the extension and only the model can change it, so the model still sees them. |
 | `rpiv-ask-user-question` | A question card: header, option rows with descriptions and previews (keys 1–9 pick one), real checkboxes for multi-select, Esc to dismiss. The answers are shown on the tool card afterwards. |
-| `rpiv-web-tools` | `web_search` lists its results as links; `web_fetch` shows the page title. |
+| `rpiv-web-tools` | `web_search` lists its results as links; `web_fetch` shows the page title. The agents of an [A2A discussion](#a2a-discussions) search with it too. |
 | `rpiv-advisor` | The advice renders as Markdown on its card, labelled with the advisor model. `/advisor` (or **Set advisor model** in the menu) opens a model and effort picker. |
 | `rpiv-btw` | `/btw <question>` answers in a side card without adding anything to the conversation. |
 | `rpiv-args` | Nothing to show: it expands `$1`-style arguments in skills before the prompt is sent, which works as is. |
@@ -231,4 +252,4 @@ npm run test:rpc    # check the pi integration without Obsidian (add `-- --promp
 npm run install:test  # after a build: install it as "Pi Harness (test)", next to the released plugin
 ```
 
-Layout: `src/requirements.ts` inspects recommended packages and owns their manual setup commands, `src/view/toolRenderers.ts` holds the per-tool cards, `src/rpc` is the JSONL client for `pi --mode rpc`, `src/view` is the panel, `src/env.ts` recovers the login shell's `PATH` (apps started from the Dock don't get it), `src/prompt.ts` holds the system prompt and the active-note context block, and `src/search` is `obsidian_search`: `SearchIndex.ts` ranks (no Obsidian API, tested by `test:rpc`) and `VaultSearch.ts` keeps it fed from the vault. The pi extensions the plugin ships are in `pi-extension/`. Ideas not built yet: [docs/semantic-search.md](docs/semantic-search.md).
+Layout: `src/requirements.ts` inspects recommended packages and owns their manual setup commands, `src/view/toolRenderers.ts` holds the per-tool cards, `src/rpc` is the JSONL client for `pi --mode rpc`, `src/view` is the panel, `src/env.ts` recovers the login shell's `PATH` (apps started from the Dock don't get it), `src/prompt.ts` holds the system prompt and the active-note context block, and `src/search` is `obsidian_search`: `SearchIndex.ts` ranks (no Obsidian API, tested by `test:rpc`) and `VaultSearch.ts` keeps it fed from the vault. The pi extensions the plugin ships are in `pi-extension/`. A2A discussions are split between the two: `pi-extension/a2a/discussion.ts` owns the discussion (turn order, what each agent is told, the transcript; no pi or Obsidian imports, tested by `test:rpc`), `agentTurn.ts` runs one turn as a one-off pi, and `src/a2a/` is the panel's side: the automatic lineup, the proposal card and the transcript card. Ideas not built yet: [docs/semantic-search.md](docs/semantic-search.md).

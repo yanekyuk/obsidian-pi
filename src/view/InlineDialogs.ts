@@ -4,7 +4,17 @@ import type { RenderHost } from "./blocks";
 import { renderInline } from "./markdown";
 
 export type UiAnswer = { value: string } | { confirmed: boolean } | { cancelled: true };
-type Request = ExtensionUiRequest & { timeout?: number };
+
+// A question of the panel's own making, drawn by its owner instead of as a plain dialog (the
+// A2A lineup, for one). The dock still queues it, dismisses it with Esc and answers it once.
+export interface DialogForm {
+	header: string;
+	icon: string;
+	// Fills the card and returns what to focus.
+	render(card: HTMLElement, answer: (answer: UiAnswer) => void): HTMLElement;
+}
+
+type Request = ExtensionUiRequest & { timeout?: number; form?: DialogForm };
 
 interface ParsedOption {
 	value: string; // what goes back to pi, exactly as offered
@@ -136,10 +146,10 @@ export class InlineDialogs {
 
 		const card = this.el.createDiv({ cls: "pi-dialog", attr: { tabindex: "-1" } });
 		const head = card.createDiv({ cls: "pi-dialog-head" });
-		setIcon(head.createSpan({ cls: "pi-icon" }), "message-circle-question");
+		setIcon(head.createSpan({ cls: "pi-icon" }), req.form?.icon ?? "message-circle-question");
 		const multi = parseMultiSelect(req);
 		const { header, body } = splitHeader(multi ? multi.question : (req.title ?? ""));
-		head.createSpan({ cls: "pi-dialog-header", text: header ?? "pi is asking" });
+		head.createSpan({ cls: "pi-dialog-header", text: req.form?.header ?? header ?? "pi is asking" });
 		head.createSpan({ cls: "pi-dialog-count" });
 		const dismiss = head.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Dismiss (Esc)" } });
 		setIcon(dismiss, "x");
@@ -148,13 +158,14 @@ export class InlineDialogs {
 
 		const { question, previews } = splitPreviews(body);
 		const text = [question, req.message].filter(Boolean).join("\n\n");
-		if (text) {
+		if (text && !req.form) {
 			const questionEl = card.createDiv({ cls: "pi-dialog-question markdown-rendered" });
 			void MarkdownRenderer.render(this.host.app, text, questionEl, "", this.host.component).then(() => this.host.onContentChanged());
 		}
 
 		let focusTarget: HTMLElement = card;
-		if (multi) focusTarget = this.renderMultiSelect(card, req, multi.options);
+		if (req.form) focusTarget = req.form.render(card, (answer) => this.finish(req, answer));
+		else if (multi) focusTarget = this.renderMultiSelect(card, req, multi.options);
 		else if (req.method === "select") this.renderSelect(card, req, parseOptions(req.options ?? [], previews));
 		else if (req.method === "confirm") this.renderConfirm(card, req);
 		else focusTarget = this.renderText(card, req);

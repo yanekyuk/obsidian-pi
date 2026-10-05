@@ -1,4 +1,5 @@
 import { MarkdownRenderer } from "obsidian";
+import { a2aDiscussion } from "../a2a/transcriptCard";
 import type { ToolResult } from "../rpc/types";
 import { contentText } from "../sessions";
 import type { RenderHost } from "./blocks";
@@ -162,4 +163,5 @@ export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
 	advisor,
 	web_search: webSearch,
 	web_fetch: webFetch,
+	a2a_discussion: a2aDiscussion,
 };

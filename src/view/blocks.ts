@@ -194,7 +194,9 @@ export class ToolCard {
 
 	setArgs(args: Record<string, unknown>, result?: ToolResult): void {
 		this.args = args;
-		const { text, path } = this.renderer ? { text: this.renderer.summary(args, result), path: null } : summarize(this.name, args);
+		const renderer = this.renderer;
+		const custom = renderer ? this.safely(() => renderer.summary(args, result)) : null;
+		const { text, path } = custom !== null ? { text: custom, path: null } : summarize(this.name, args);
 		this.summaryEl.empty();
 		this.summaryEl.setAttr("title", text);
 		this.summaryEl.toggleClass("has-path", Boolean(path));
@@ -225,6 +227,18 @@ export class ToolCard {
 		};
 		if (isImage) button("image", "Show image here", () => void this.showImage(path));
 		button("external-link", "Open file", (evt) => void this.openFile(path, evt.metaKey || evt.ctrlKey));
+	}
+
+	// A tool's own presentation is a nicety: when it chokes on a result it didn't expect (an old
+	// session, a changed extension), the card falls back to the plain one instead of taking the
+	// whole transcript down with it.
+	private safely<T>(render: () => T): T | null {
+		try {
+			return render();
+		} catch (err) {
+			console.warn(`[pi-harness] couldn't render the ${this.name} card; showing it plain`, err);
+			return null;
+		}
 	}
 
 	// In Obsidian when the file is in the vault, otherwise in whatever the system opens it with.
@@ -306,7 +320,9 @@ export class ToolCard {
 			this.setArgs(this.args, result);
 			if (!isError && this.renderer.body) {
 				this.outputEl = this.bodyEl.createDiv();
-				if (this.renderer.body(this.outputEl, result, this.host)) return;
+				const { body } = this.renderer;
+				const outputEl = this.outputEl;
+				if (this.safely(() => body(outputEl, result, this.host))) return;
 				this.outputEl.remove();
 			}
 		}

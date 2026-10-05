@@ -1384,3 +1384,120 @@ textarea.pi-input:active {
 .pi-status-bar[data-status="asking"] {
 	color: var(--text-accent);
 }
+
+/* ---- A2A discussions: the proposal card and the transcript on the tool card ---- */
+
+.pi-a2a-form {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-3);
+}
+.pi-a2a-field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-2);
+}
+.pi-a2a-label {
+	display: flex;
+	align-items: baseline;
+	gap: var(--size-4-2);
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+}
+.pi-a2a-note {
+	font-weight: var(--font-normal);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.pi-a2a-form .pi-dialog-editor {
+	min-height: 3.2em;
+	font-family: var(--font-interface);
+	resize: vertical;
+}
+.pi-a2a-form .pi-a2a-topic {
+	min-height: 2.4em;
+}
+.pi-a2a-model {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: var(--size-2-3);
+	width: 100%;
+	height: auto;
+	padding: var(--size-2-3) var(--size-4-2);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	overflow-wrap: anywhere;
+	text-align: start;
+}
+.pi-a2a-maker {
+	margin-inline-start: auto;
+	padding: 0 var(--size-2-3);
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+	font-family: var(--font-interface);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+.pi-a2a-rounds {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+	font-weight: var(--font-semibold);
+}
+.pi-a2a-warnings:empty {
+	display: none;
+}
+.pi-a2a-warning {
+	color: var(--text-warning);
+}
+
+.pi-tool-rich.pi-a2a {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-3);
+	max-height: 40em;
+}
+.pi-a2a-lineup {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-2);
+}
+.pi-a2a-lineup-row,
+.pi-a2a-turn-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--size-2-3);
+}
+.pi-a2a-lineup-row .pi-a2a-maker,
+.pi-a2a-turn-head .pi-a2a-maker {
+	margin-inline-start: 0;
+	font-family: var(--font-monospace);
+}
+.pi-a2a-role {
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+}
+.pi-a2a-stance {
+	flex-basis: 100%;
+	color: var(--text-muted);
+}
+.pi-a2a-turn {
+	padding-inline-start: var(--size-4-3);
+	border-inline-start: 3px solid var(--color-blue);
+}
+.pi-a2a-turn[data-role="debaterB"] {
+	border-inline-start-color: var(--color-orange);
+}
+.pi-a2a-turn[data-role="referee"] {
+	border-inline-start-color: var(--text-faint);
+}
+.pi-a2a-searches,
+.pi-a2a-waiting {
+	margin-top: var(--size-2-2);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}

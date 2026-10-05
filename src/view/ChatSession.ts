@@ -2,6 +2,9 @@ import { Component, Keymap, Menu, Notice, TFile, setIcon, type App, type Events,
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { basename, relative, resolve } from "path";
+import { A2A_CHANNEL, type Proposal } from "../../pi-extension/a2a/discussion";
+import { lineupCard } from "../a2a/LineupCard";
+import { suggestLineup } from "../a2a/lineup";
 import { readAdvisorConfig, writeAdvisorConfig } from "../advisor";
 import { BROWSER_CHANNEL } from "../browser";
 import { OBSIDIAN_CHANNEL } from "../obsidianControl";
@@ -15,7 +18,7 @@ import { contentText } from "../sessions";
 import { AttachmentTray, imageFilesOf, imageSrc } from "./Attachments";
 import { MarkdownBlock, ThinkingBlock, ToolCard, rerenderMarkdownIn, type RenderHost } from "./blocks";
 import { ComposerSuggest } from "./ComposerSuggest";
-import { InlineDialogs } from "./InlineDialogs";
+import { InlineDialogs, type DialogForm } from "./InlineDialogs";
 import { readEnabledModels, scopeModels } from "../models";
 import { renderInline } from "./markdown";
 import { ModelPicker, pickOne, promptText } from "./modals";
@@ -1189,15 +1192,16 @@ export class ChatSession {
 			});
 			return;
 		}
+		if (req.method === "input" && req.title === A2A_CHANNEL) {
+			void this.proposeDiscussion(req);
+			return;
+		}
 		switch (req.method) {
 			case "select":
 			case "confirm":
 			case "input":
 			case "editor":
-				this.dialogs.push(req);
-				// The question sits in this tab; say so if the user is looking somewhere else.
-				if (!this.host.isShowing(this)) this.callOver(`pi has a question for you in "${this.title}".`);
-				else if (!this.el.contains(this.el.ownerDocument.activeElement)) this.callOver("pi has a question for you.");
+				this.askUser(req);
 				break;
 			case "notify":
 				this.showNotification(stripAnsi(req.message ?? ""), req.notifyType ?? "info");
@@ -1217,6 +1221,38 @@ export class ChatSession {
 				this.inputEl.value = req.text ?? "";
 				this.autoGrow();
 				break;
+		}
+	}
+
+	private askUser(req: ExtensionUiRequest & { form?: DialogForm }): void {
+		this.dialogs.push(req);
+		// The question sits in this tab; say so if the user is looking somewhere else.
+		if (!this.host.isShowing(this)) this.callOver(`pi has a question for you in "${this.title}".`);
+		else if (!this.el.contains(this.el.ownerDocument.activeElement)) this.callOver("pi has a question for you.");
+	}
+
+	// pi's a2a_discussion tool asks for a lineup (see pi-extension/a2a). The card suggests a model
+	// per role; the user changes what they like, then starts the discussion or declines it.
+	private async proposeDiscussion(req: ExtensionUiRequest): Promise<void> {
+		try {
+			const proposal = JSON.parse(req.placeholder ?? "{}") as Proposal;
+			const available = await this.client.getAvailableModels();
+			const scoped = scopeModels(await readEnabledModels(this.plugin.panelSettingsFile), available);
+			const lineup = suggestLineup({ available, scoped: scoped.models, current: this.state?.model ?? null, advisor: readAdvisorConfig().modelKey });
+			const settings = this.plugin.settings;
+			const form = lineupCard(this.app, proposal, lineup, {
+				available,
+				scoped,
+				showAll: settings.showAllModels,
+				onShowAllChange: (showAll) => {
+					settings.showAllModels = showAll;
+					void this.plugin.saveSettings();
+				},
+			});
+			this.askUser({ ...req, form });
+		} catch (err) {
+			// pi is waiting on the answer, so it gets one either way.
+			if (this.client.running) this.client.respondToUi(req.id, { value: JSON.stringify({ error: (err as Error).message }) });
 		}
 	}
 
