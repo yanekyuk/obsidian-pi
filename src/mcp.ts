@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import { request as httpRequest } from "http";
 import { request as httpsRequest } from "https";
 import { join } from "path";
+import type { SlashCommand } from "./rpc/types";
 
 export interface McpServer {
 	name: string;
@@ -9,6 +10,12 @@ export interface McpServer {
 }
 
 const PROBE_TIMEOUT_MS = 1500;
+
+// pi v1's built-in /mcp reads .pi/mcp.json, not the vault's .mcp.json, so only the legacy
+// adapter's /mcp knows the servers vaultMcpServers finds.
+export function hasLegacyMcpCommand(commands: SlashCommand[]): boolean {
+	return commands.some((c) => c.name === "mcp" && c.sourceInfo?.source !== "builtin");
+}
 
 // The HTTP servers in the vault's .mcp.json, which is where pi's MCP adapter finds them.
 // Command-based (stdio) servers are started by the adapter itself and can't be probed.

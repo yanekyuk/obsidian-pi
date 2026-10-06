@@ -30,7 +30,7 @@ export { DEFAULT_SETTINGS } from ${JSON.stringify(join(root, "src/settings.ts"))
 export { listSessions } from ${JSON.stringify(join(root, "src/sessions.ts"))};
 export { splitHeader, splitPreviews, parseOptions, parseMultiSelect } from ${JSON.stringify(join(root, "src/view/InlineDialogs.ts"))};
 export { Requirements, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS } from ${JSON.stringify(join(root, "src/requirements.ts"))};
-export { vaultMcpServers, probeMcp, unusableMcpServers } from ${JSON.stringify(join(root, "src/mcp.ts"))};
+export { vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand } from ${JSON.stringify(join(root, "src/mcp.ts"))};
 export { tasksFrom } from ${JSON.stringify(join(root, "src/view/TodoPanel.ts"))};
 export { TOOL_RENDERERS } from ${JSON.stringify(join(root, "src/view/toolRenderers.ts"))};
 export { summarize } from ${JSON.stringify(join(root, "src/view/TabSwitcher.ts"))};
@@ -64,7 +64,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, summarize, scopeModels, suggestLineup, makerOf, sharedMakers, runDiscussion, discussionMarkdown, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, rewordMessage, withContext, SearchIndex, trimToolOutput } =
+const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, suggestLineup, makerOf, sharedMakers, runDiscussion, discussionMarkdown, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, rewordMessage, withContext, SearchIndex, trimToolOutput } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -581,6 +581,12 @@ const check = (ok, label, detail = "") => {
 	const vault = join(work, "vault");
 	mkdirSync(vault);
 	check((await vaultMcpServers(vault)).length === 0, "mcp: a vault without .mcp.json has nothing to check");
+	check(
+		!hasLegacyMcpCommand([{ name: "mcp", source: "extension", sourceInfo: { path: "builtin:mcp", source: "builtin" } }]) &&
+			hasLegacyMcpCommand([{ name: "mcp", source: "extension", sourceInfo: { path: "/x/node_modules/pi-mcp-adapter/index.ts", source: "npm:pi-mcp-adapter" } }]) &&
+			!hasLegacyMcpCommand([]),
+		"mcp: only the legacy adapter's /mcp is asked to reconnect .mcp.json servers, not pi's built-in one",
+	);
 	writeFileSync(join(vault, ".mcp.json"), JSON.stringify({ mcpServers: {
 		working: { type: "http", url: url(ok) },
 		auth: { type: "http", url: url(needsAuth) },

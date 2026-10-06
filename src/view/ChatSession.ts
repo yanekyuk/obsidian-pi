@@ -9,7 +9,7 @@ import { readAdvisorConfig, writeAdvisorConfig } from "../advisor";
 import { BROWSER_CHANNEL } from "../browser";
 import { OBSIDIAN_CHANNEL } from "../obsidianControl";
 import type PiAgentPlugin from "../main";
-import { probeMcp, unusableMcpServers, vaultMcpServers } from "../mcp";
+import { hasLegacyMcpCommand, probeMcp, unusableMcpServers, vaultMcpServers } from "../mcp";
 import { readActiveContext, rewordMessage, splitContext, withContext } from "../prompt";
 import { findRequired, manualInstallCommands, OBSIDIAN_SKILLS, SKILLS_PACKAGE } from "../requirements";
 import { PiRpcClient } from "../rpc/PiRpcClient";
@@ -488,7 +488,7 @@ export class ChatSession {
 	// so /mcp reads "disconnected (0 tools)" until something uses one. In Obsidian the vault's
 	// own server is the point, so connect the ones that are up as soon as pi has started.
 	private async connectMcp(): Promise<void> {
-		if (!this.plugin.settings.connectMcpOnStart || !this.suggest.commands.some((c) => c.name === "mcp")) return;
+		if (!this.plugin.settings.connectMcpOnStart || !hasLegacyMcpCommand(this.suggest.commands)) return;
 		for (const server of await vaultMcpServers(this.plugin.vaultPath)) {
 			// A name with a space can't be passed to the command; a server that is down gets the warning instead.
 			if (/\s/.test(server.name) || (await probeMcp(server.url)) !== null || !this.client.running) continue;

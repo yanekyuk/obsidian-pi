@@ -35,6 +35,8 @@ export interface SlashCommand {
 	description?: string;
 	// "panel" marks commands the plugin answers itself; pi reports the other three.
 	source: "extension" | "prompt" | "skill" | "panel";
+	// Where pi loaded it from; `source` is "builtin" for commands that ship with pi.
+	sourceInfo?: { path?: string; source?: string };
 }
 
 export interface TextContent {
