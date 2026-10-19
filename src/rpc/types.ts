@@ -20,6 +20,7 @@ export interface SessionState {
 	sessionFile?: string;
 	sessionId?: string;
 	sessionName?: string;
+	sessionShareDestination?: "auto" | "gist" | "radius";
 	messageCount: number;
 	pendingMessageCount: number;
 }
@@ -94,6 +95,8 @@ export interface SessionEntry {
 	id: string;
 	parentId: string | null;
 	message?: AgentMessage;
+	customType?: string;
+	data?: unknown;
 }
 
 export type AssistantMessageEvent =
@@ -123,14 +126,16 @@ export interface ExtensionUiRequest {
 }
 
 export type RpcEvent =
-	| { type: "agent_start" | "agent_settled" | "turn_start" }
+	| { type: "agent_start" | "turn_start" }
+	| { type: "agent_settled"; aborted?: boolean }
 	| { type: "agent_end"; willRetry?: boolean }
 	| { type: "message_start" | "message_end"; message: AgentMessage }
 	| { type: "message_update"; assistantMessageEvent: AssistantMessageEvent }
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: Record<string, unknown> }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; partialResult: ToolResult }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: ToolResult; isError: boolean }
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: ToolResult; isError: boolean; durationMs?: number }
 	| { type: "queue_update"; steering: string[]; followUp: string[] }
+	| { type: "entry_appended"; entry: SessionEntry }
 	| { type: "compaction_start"; reason: string }
 	| { type: "compaction_end"; reason: string; aborted?: boolean; willRetry?: boolean; errorMessage?: string; result?: { tokensBefore?: number; estimatedTokensAfter?: number } | null }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }

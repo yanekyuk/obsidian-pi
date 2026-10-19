@@ -59,16 +59,18 @@ const askUserQuestion: ToolRenderer = {
 		return questions.length > 1 ? `${first} (+${questions.length - 1})` : first;
 	},
 	body(el, result, host) {
-		const details = result.details as { answers?: Answer[]; cancelled?: boolean } | null | undefined;
+		const details = result.details as { answers?: Answer[]; cancelled?: boolean; globalNote?: string } | null | undefined;
 		if (!details || !Array.isArray(details.answers)) return false;
 		const list = el.createDiv({ cls: "pi-tool-rich pi-qa" });
 		for (const a of details.answers) {
 			const row = list.createDiv({ cls: "pi-qa-row" });
 			renderInline(host, row.createDiv({ cls: "pi-qa-question" }), a.question);
-			const given = a.kind === "multi" ? (a.selected?.length ? a.selected.join(", ") : "Nothing selected") : (a.answer ?? "");
+			const selected = a.selected?.length ? a.selected.join(", ") : "";
+			const given = a.kind === "multi" ? ([selected, a.answer].filter(Boolean).join("; ") || "Nothing selected") : (a.answer ?? "");
 			renderInline(host, row.createDiv({ cls: "pi-qa-answer" }), given);
 			if (a.notes) renderInline(host, row.createDiv({ cls: "pi-qa-notes" }), a.notes);
 		}
+		if (details.globalNote) renderInline(host, list.createDiv({ cls: "pi-qa-notes" }), `Note: ${details.globalNote}`);
 		if (details.cancelled) list.createDiv({ cls: "pi-qa-notes", text: details.answers.length ? "Dismissed before the last question." : "Dismissed without answering." });
 		return true;
 	},

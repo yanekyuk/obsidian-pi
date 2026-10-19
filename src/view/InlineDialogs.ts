@@ -30,12 +30,12 @@ interface ParsedOption {
 // of @juicesharp/rpiv-ask-user-question (see its rpc-fallback.ts):
 //   title    "[Header] Question?\n\n--- 1. Label preview ---\n<preview>"
 //   option   "1. Label — description"
-//   multi    an input whose title lists the options and whose placeholder is "1,3";
+//   multi    an input whose title lists the options and whose placeholder starts with "1,3";
 //            the answer is the chosen numbers, or free text for a custom answer
 // Anything that doesn't match is shown as the plain dialog it is.
 
 const NUMBERED = /^(\d+)\.\s+(.*?)(?:\s+—\s+(.*))?$/;
-const MULTI_SELECT_PLACEHOLDER = "1,3";
+const isMultiSelectPlaceholder = (p: string | undefined): boolean => typeof p === "string" && (p === "1,3" || p.startsWith("1,3"));
 
 export function splitHeader(title: string): { header: string | null; body: string } {
 	const match = title.match(/^\[([^\]\n]{1,40})\]\s+/);
@@ -63,7 +63,7 @@ export function parseOptions(options: string[], previews: Map<number, string>): 
 
 // The question, its options and nothing else: the typing instructions are replaced by checkboxes.
 export function parseMultiSelect(req: Request): { question: string; options: ParsedOption[] } | null {
-	if (req.method !== "input" || req.placeholder !== MULTI_SELECT_PLACEHOLDER) return null;
+	if (req.method !== "input" || !isMultiSelectPlaceholder(req.placeholder)) return null;
 	const blocks = (req.title ?? "").split("\n\n");
 	const listAt = blocks.findIndex((b) => b.split("\n").every((line) => NUMBERED.test(line)));
 	if (listAt < 1) return null;
@@ -219,12 +219,11 @@ export class InlineDialogs {
 			return box;
 		});
 		const other = card.createEl("input", { type: "text", cls: "pi-dialog-input", attr: { placeholder: "Or type your own answer…" } });
-		// A typed answer replaces the selection (that is how the extension reads it), so show that.
-		other.addEventListener("input", () => list.toggleClass("is-overridden", other.value.trim() !== ""));
 		const submit = () => {
 			const typed = other.value.trim();
 			const chosen = boxes.flatMap((box, i) => (box.checked ? [String(i + 1)] : []));
-			this.finish(req, { value: typed || chosen.join(",") });
+			const value = chosen.length && typed ? `${chosen.join(",")}; ${typed}` : typed || chosen.join(",");
+			this.finish(req, { value });
 		};
 		other.addEventListener("keydown", (evt) => {
 			if (evt.key === "Enter" && !evt.isComposing) {

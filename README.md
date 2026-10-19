@@ -199,8 +199,8 @@ These are vault-local installs, so they work whether Pi Harness uses `~/.pi/harn
 
 | Extension | In the panel |
 | --- | --- |
-| `rpiv-todo` | A live task list pinned above the composer with progress, rebuilt from the session when you reopen it. Each call is a one-line card ("Add tests → in progress"). The clear button hides completed and cancelled tasks from the panel and remembers that per session; the list itself belongs to the extension and only the model can change it, so the model still sees them. |
-| `rpiv-ask-user-question` | A question card: header, option rows with descriptions and previews (keys 1–9 pick one), real checkboxes for multi-select, Esc to dismiss. The answers are shown on the tool card afterwards. |
+| `rpiv-todo` | A live task list sits above the composer with progress. It rebuilds from session entries when you reopen it. Each call shows a one-line card. The clear button hides finished tasks from the panel. The list belongs to the extension, so the model still sees hidden tasks. |
+| `rpiv-ask-user-question` | A question card shows a header, options with descriptions and previews, checkboxes for multi-select, and custom text. Esc dismisses the card. Answers appear on the tool card afterwards. |
 | `rpiv-web-tools` | `web_search` lists its results as links; `web_fetch` shows the page title. The agents of an [A2A discussion](#a2a-discussions) search with it too. |
 | `rpiv-advisor` | The advice renders as Markdown on its card, labelled with the advisor model. `/advisor` (or **Set advisor model** in the menu) opens a model and effort picker. |
 | `rpiv-btw` | `/btw <question>` answers in a side card without adding anything to the conversation. |

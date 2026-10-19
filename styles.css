@@ -669,9 +669,6 @@ textarea.pi-input:active {
 	flex-direction: column;
 	gap: var(--size-2-3);
 }
-.pi-dialog-options.is-overridden {
-	opacity: 0.45;
-}
 .pi-dialog-option {
 	display: flex;
 	align-items: flex-start;

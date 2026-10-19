@@ -1124,6 +1124,11 @@ export class ChatSession {
 				this.piQueue = { steering: e.steering, followUp: e.followUp };
 				this.renderQueue();
 				break;
+			case "entry_appended":
+				if (e.entry.type === "custom" && e.entry.customType === "rpiv-todo-state") {
+					this.todos.set(tasksFrom(e.entry.data) ?? null);
+				}
+				break;
 			case "compaction_start":
 				this.setCompacting(true);
 				this.setActivity("Compacting context…");
@@ -1279,6 +1284,20 @@ export class ChatSession {
 			}
 		}
 		this.todos.set(tasks);
+		if (this.client.running) {
+			void this.client.getEntries().then(({ entries }) => {
+				for (let i = entries.length - 1; i >= 0; i--) {
+					const entry = entries[i];
+					if (entry.type === "custom" && entry.customType === "rpiv-todo-state") {
+						const snapshot = tasksFrom(entry.data);
+						if (snapshot) {
+							this.todos.set(snapshot);
+							break;
+						}
+					}
+				}
+			}).catch(() => {});
+		}
 		this.renderEmptyState();
 		this.stickToBottom = true;
 		this.keepScrolled();

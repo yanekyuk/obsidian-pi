@@ -542,7 +542,25 @@ const check = (ok, label, detail = "") => {
 		check(m?.options.map((o) => o.label).join() === "Journal,People,Projects" && seen.multiHeader.header === "Scope" && seen.multiHeader.body === "Which folders?", "multi-select: decoded into checkboxes, typing instructions dropped");
 		check(result.answers[0]?.answer === "date-fns" && result.answers[0].kind === "option", "round trip: clicking option 2 answers with its label", result.answers[0]?.answer);
 		check(result.answers[1]?.selected?.join() === "Journal,Projects" && !result.cancelled, "round trip: ticking boxes 1 and 3 selects those labels", result.answers[1]?.selected?.join());
+		const combined = await runRpcQuestionnaire(
+			{
+				select: async () => "1",
+				input: async () => "1,3; custom answer",
+			},
+			{
+				questions: [
+					{ header: "Scope", question: "Which folders?", multiSelect: true, options: [{ label: "Journal", description: "Daily notes" }, { label: "People", description: "Contacts" }, { label: "Projects", description: "Active work" }] },
+				],
+			},
+		);
+		check(
+			combined.answers[0]?.selected?.join() === "Journal,Projects" && combined.answers[0]?.answer === "custom answer",
+			"round trip: selection and custom answer submit together in multi-select",
+			`${combined.answers[0]?.selected?.join()} / ${combined.answers[0]?.answer}`,
+		);
 		check(parseMultiSelect({ method: "input", title: "Enter a value", placeholder: "type something..." }) === null, "an ordinary input is not mistaken for a multi-select");
+		check(parseMultiSelect({ method: "input", title: "Which?\n\n1. A\n2. B", placeholder: "1,3; custom answer" }) !== null, "multi-select: accepts rpiv 2.13.6+ placeholder");
+		check(parseMultiSelect({ method: "input", title: "Which?\n\n1. A\n2. B", placeholder: "1,3" }) !== null, "multi-select: accepts legacy 1,3 placeholder");
 		const plain = parseOptions(["Allow", "Block"], new Map());
 		check(plain[0].label === "Allow" && plain[0].value === "Allow" && plain[0].description === "", "an ordinary select keeps its options as they are");
 	}
@@ -552,6 +570,8 @@ const check = (ok, label, detail = "") => {
 {
 	const details = { action: "update", tasks: [{ id: 1, subject: "Write parser", status: "completed" }, { id: 2, subject: "Add tests", activeForm: "Adding tests", status: "in_progress", blockedBy: [1] }, { junk: true }], nextId: 3 };
 	check(tasksFrom(details)?.length === 2 && tasksFrom({}) === null && tasksFrom(null) === null, "task snapshot is read from details.tasks, junk ignored");
+	const stateEntry = { type: "custom", customType: "rpiv-todo-state", data: details };
+	check(tasksFrom(stateEntry.data)?.length === 2, "todo: snapshot is read from rpiv-todo-state custom entry data");
 	const todo = TOOL_RENDERERS.todo;
 	check(todo.summary({ action: "create", subject: "Write parser" }) === "Write parser", "todo card: create shows the task");
 	check(todo.summary({ action: "update", id: 2, status: "in_progress" }) === "#2 → in progress", "todo card: update shows id until the result arrives");
