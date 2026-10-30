@@ -208,6 +208,152 @@
 	color: var(--text-muted);
 }
 
+/* ---- tool groups ---- */
+
+.pi-tool-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-2);
+	margin: var(--size-2-1) 0;
+}
+
+.pi-tool-group-header {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+}
+
+.pi-tool-group-prev {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	align-self: flex-start;
+	max-width: 100%;
+	padding: var(--size-2-1) var(--size-2-3);
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-family: var(--font-interface);
+	cursor: pointer;
+	text-align: left;
+	transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.pi-tool-group-prev:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+	border-color: var(--background-modifier-border-focus);
+}
+
+.pi-tool-group-chevron {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	transition: transform 140ms ease;
+	color: var(--text-faint);
+}
+
+.pi-tool-group-chevron .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+
+.pi-tool-group-prev.is-open .pi-tool-group-chevron {
+	transform: rotate(90deg);
+}
+
+.pi-tool-group-prev-title {
+	font-weight: var(--font-medium);
+	color: var(--text-muted);
+	flex: none;
+}
+
+.pi-tool-group-prev-count {
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+	flex: none;
+}
+
+.pi-tool-group-prev-sep {
+	color: var(--text-faint);
+	flex: none;
+}
+
+.pi-tool-group-prev-summary {
+	color: var(--text-faint);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+.pi-tool-group-prev:hover .pi-tool-group-prev-summary {
+	color: var(--text-muted);
+}
+
+.pi-tool-group-current {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	padding: var(--size-1-2) var(--size-2-2);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.pi-tool-group-current-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	color: var(--text-faint);
+}
+
+.pi-tool-group-current-icon .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+
+.pi-tool-group-current[data-status="running"] .pi-tool-group-current-icon {
+	color: var(--interactive-accent);
+	animation: pi-spin 1.2s linear infinite;
+}
+
+.pi-tool-group-current[data-status="done"] .pi-tool-group-current-icon {
+	color: var(--text-success);
+}
+
+.pi-tool-group-current[data-status="error"] .pi-tool-group-current-icon {
+	color: var(--text-error);
+}
+
+.pi-tool-group-current-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+.pi-tool-group-previous {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-2);
+}
+
+.pi-tool-group-previous.is-collapsed {
+	display: none;
+}
+
+.pi-tool-group-active {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-2);
+}
+
 /* ---- tool calls ---- */
 
 .pi-tool {

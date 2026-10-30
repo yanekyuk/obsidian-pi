@@ -156,6 +156,69 @@ function summarize(name: string, args: Record<string, unknown>): { text: string;
 	}
 }
 
+function actionNameOf(toolName: string, args: Record<string, unknown>): string {
+	if (toolName === "bash") {
+		const cmd = typeof args["command"] === "string" ? (args["command"] as string).trim() : "";
+		if (!cmd) return "bash";
+		const tokens = cmd.split(/\s+/).filter((t) => !t.includes("=") && !t.startsWith("-"));
+		let first = tokens[0] ?? "";
+		if (first === "sudo" && tokens[1]) first = tokens[1];
+		first = first.replace(/^.*[/\\]/, "");
+		return first || "bash";
+	}
+	return toolName;
+}
+
+function formatPreviousSummary(cards: ToolCard[]): string {
+	if (cards.length === 0) return "";
+	if (cards.length === 1) {
+		const c = cards[0];
+		const summary = c.summaryLine;
+		if (summary && summary !== c.actionLabel) {
+			const shortSummary = summary.length > 40 ? summary.slice(0, 37) + "…" : summary;
+			return `${c.actionLabel} (${shortSummary})`;
+		}
+		return c.actionLabel;
+	}
+
+	const counts = new Map<string, number>();
+	for (const c of cards) {
+		const key = c.actionLabel;
+		counts.set(key, (counts.get(key) ?? 0) + 1);
+	}
+
+	const parts: string[] = [];
+	for (const [key, count] of counts.entries()) {
+		parts.push(count > 1 ? `${key} (×${count})` : key);
+	}
+	return parts.join(", ");
+}
+
+function formatCurrentActivity(active: ToolCard): string {
+	const name = active.toolName;
+	const summary = active.summaryLine;
+	const status = active.status;
+
+	if (status === "running") {
+		if (name === "bash") return summary ? `Running: ${summary}` : "Running command…";
+		if (name === "read") return `Reading ${summary || "file"}…`;
+		if (name === "edit") return `Editing ${summary || "file"}…`;
+		if (name === "write") return `Writing ${summary || "file"}…`;
+		if (name === "grep" || name === "find") return `Searching: ${summary}…`;
+		return summary ? `Running ${name}: ${summary}` : `Running ${name}…`;
+	}
+
+	if (status === "pending") {
+		return `Calling ${name}…`;
+	}
+
+	if (status === "error") {
+		return `Failed: ${name}${summary ? ` (${summary})` : ""}`;
+	}
+
+	return `Done: ${name}${summary ? ` (${summary})` : ""}`;
+}
+
 export class ToolCard {
 	private details: HTMLDetailsElement;
 	private statusEl: HTMLElement;
@@ -168,6 +231,9 @@ export class ToolCard {
 	private resultHasImages = false;
 	private revertEl: HTMLElement | null = null;
 	private revertNoteEl: HTMLElement | null = null;
+	private currentStatus: "pending" | "running" | "done" | "error" = "pending";
+	private summaryString = "";
+	private updateListeners: (() => void)[] = [];
 
 	constructor(
 		parent: HTMLElement,
@@ -188,8 +254,36 @@ export class ToolCard {
 		this.setStatus("pending");
 	}
 
+	get el(): HTMLElement {
+		return this.details;
+	}
+
+	get toolName(): string {
+		return this.name;
+	}
+
+	get status(): "pending" | "running" | "done" | "error" {
+		return this.currentStatus;
+	}
+
+	get summaryLine(): string {
+		return this.summaryString;
+	}
+
+	get actionLabel(): string {
+		return actionNameOf(this.name, this.args);
+	}
+
 	get arguments(): Record<string, unknown> {
 		return this.args;
+	}
+
+	onUpdate(listener: () => void): void {
+		this.updateListeners.push(listener);
+	}
+
+	private notifyUpdate(): void {
+		for (const l of this.updateListeners) l();
 	}
 
 	setArgs(args: Record<string, unknown>, result?: ToolResult): void {
@@ -197,11 +291,13 @@ export class ToolCard {
 		const renderer = this.renderer;
 		const custom = renderer ? this.safely(() => renderer.summary(args, result)) : null;
 		const { text, path } = custom !== null ? { text: custom, path: null } : summarize(this.name, args);
+		this.summaryString = text;
 		this.summaryEl.empty();
 		this.summaryEl.setAttr("title", text);
 		this.summaryEl.toggleClass("has-path", Boolean(path));
 		if (!path) {
 			this.summaryEl.setText(text);
+			this.notifyUpdate();
 			return;
 		}
 		const isImage = imageTypeOf(path) !== null;
@@ -227,6 +323,7 @@ export class ToolCard {
 		};
 		if (isImage) button("image", "Show image here", () => void this.showImage(path));
 		button("external-link", "Open file", (evt) => void this.openFile(path, evt.metaKey || evt.ctrlKey));
+		this.notifyUpdate();
 	}
 
 	// A tool's own presentation is a nicety: when it chokes on a result it didn't expect (an old
@@ -296,10 +393,12 @@ export class ToolCard {
 	}
 
 	setStatus(status: "pending" | "running" | "done" | "error"): void {
+		this.currentStatus = status;
 		this.details.dataset.status = status;
 		this.statusEl.empty();
 		const icon = { pending: "circle-dashed", running: "loader", done: "check", error: "x" }[status];
 		setIcon(this.statusEl, icon);
+		this.notifyUpdate();
 	}
 
 	setResult(result: ToolResult | undefined, isError = false): void {
@@ -310,6 +409,7 @@ export class ToolCard {
 		this.imagesEl?.remove();
 		this.imagesEl = images.length ? this.bodyEl.createDiv({ cls: "pi-tool-images" }) : null;
 		for (const image of images) this.addImage(imageSrc(image));
+		this.notifyUpdate();
 	}
 
 	private renderOutput(result: ToolResult | undefined, isError: boolean): void {
@@ -339,5 +439,158 @@ export class ToolCard {
 			text.length > MAX_OUTPUT_CHARS ? `${text.slice(0, MAX_OUTPUT_CHARS)}\n… ${text.length - MAX_OUTPUT_CHARS} more characters` : text,
 		);
 		if (!text) this.outputEl.addClass("pi-tool-output-empty");
+	}
+}
+
+export class ToolGroup {
+	readonly el: HTMLElement;
+	private headerEl: HTMLElement;
+	private prevBtn: HTMLButtonElement;
+	private prevChevronEl: HTMLElement;
+	private prevCountEl: HTMLElement;
+	private prevSummaryEl: HTMLElement;
+
+	private currentEl: HTMLElement;
+	private currentIconEl: HTMLElement;
+	private currentTextEl: HTMLElement;
+
+	readonly previousContainer: HTMLElement;
+	readonly activeContainer: HTMLElement;
+
+	private cards: ToolCard[] = [];
+	private activeCard: ToolCard | null = null;
+	private isExpanded = false;
+	private isSettled = false;
+
+	constructor(
+		parent: HTMLElement,
+		private host: RenderHost,
+	) {
+		this.el = parent.createDiv({ cls: "pi-tool-group" });
+
+		this.headerEl = this.el.createDiv({ cls: "pi-tool-group-header" });
+
+		// Previous calls expander button
+		this.prevBtn = this.headerEl.createEl("button", {
+			cls: "pi-tool-group-prev clickable",
+			attr: { "aria-expanded": "false" },
+		});
+		this.prevChevronEl = this.prevBtn.createSpan({ cls: "pi-tool-group-chevron pi-icon" });
+		setIcon(this.prevChevronEl, "chevron-right");
+		this.prevBtn.createSpan({ cls: "pi-tool-group-prev-title", text: "Previously:" });
+		this.prevCountEl = this.prevBtn.createSpan({ cls: "pi-tool-group-prev-count" });
+		this.prevBtn.createSpan({ cls: "pi-tool-group-prev-sep", text: "·" });
+		this.prevSummaryEl = this.prevBtn.createSpan({ cls: "pi-tool-group-prev-summary" });
+		this.prevBtn.addEventListener("click", (evt) => {
+			evt.preventDefault();
+			this.toggleExpanded();
+		});
+
+		// Current activity row
+		this.currentEl = this.headerEl.createDiv({ cls: "pi-tool-group-current" });
+		this.currentIconEl = this.currentEl.createSpan({ cls: "pi-tool-group-current-icon pi-icon" });
+		this.currentTextEl = this.currentEl.createSpan({ cls: "pi-tool-group-current-text" });
+
+		// Containers
+		this.previousContainer = this.el.createDiv({ cls: "pi-tool-group-previous is-collapsed" });
+		this.activeContainer = this.el.createDiv({ cls: "pi-tool-group-active" });
+
+		this.updateView();
+	}
+
+	get cardContainer(): HTMLElement {
+		return this.activeContainer;
+	}
+
+	toggleExpanded(): void {
+		this.isExpanded = !this.isExpanded;
+		this.previousContainer.toggleClass("is-collapsed", !this.isExpanded);
+		this.prevBtn.setAttr("aria-expanded", String(this.isExpanded));
+		this.prevBtn.toggleClass("is-open", this.isExpanded);
+		this.updateView();
+		this.host.onContentChanged();
+	}
+
+	addCard(card: ToolCard): void {
+		if (this.cards.includes(card)) return;
+
+		// Move former active card to previous container
+		if (this.activeCard && this.activeCard !== card) {
+			this.previousContainer.appendChild(this.activeCard.el);
+		}
+
+		this.cards.push(card);
+		this.activeCard = card;
+		this.activeContainer.appendChild(card.el);
+
+		card.onUpdate(() => this.updateView());
+		this.updateView();
+		this.host.onContentChanged();
+	}
+
+	settle(): void {
+		this.isSettled = true;
+		this.updateView();
+	}
+
+	updateView(): void {
+		const total = this.cards.length;
+		if (total === 0) {
+			this.headerEl.hide();
+			return;
+		}
+
+		this.headerEl.show();
+		const prevCount = total - 1;
+
+		// 1. Previous calls expander
+		if (prevCount > 0) {
+			this.prevBtn.show();
+			const prevCards = this.cards.slice(0, prevCount);
+			const failedCount = prevCards.filter((c) => c.status === "error").length;
+			const failedText = failedCount > 0 ? ` (${failedCount} failed)` : "";
+			this.prevCountEl.setText(`${prevCount} ${prevCount === 1 ? "call" : "calls"}${failedText}`);
+			const summary = formatPreviousSummary(prevCards);
+			this.prevSummaryEl.setText(summary);
+			this.prevBtn.setAttr("title", `Click to ${this.isExpanded ? "collapse" : "expand"} previous calls`);
+		} else {
+			this.prevBtn.hide();
+		}
+
+		// 2. What it is doing currently
+		const active = this.activeCard;
+		if (this.isSettled) {
+			if (total > 1) {
+				this.currentEl.show();
+				const errorCount = this.cards.filter((c) => c.status === "error").length;
+				if (errorCount > 0) {
+					setIcon(this.currentIconEl, "alert-circle");
+					this.currentEl.dataset.status = "error";
+					this.currentTextEl.setText(`Completed ${total} tool calls (${errorCount} failed)`);
+				} else {
+					setIcon(this.currentIconEl, "check");
+					this.currentEl.dataset.status = "done";
+					this.currentTextEl.setText(`Completed ${total} tool calls`);
+				}
+			} else {
+				this.currentEl.hide();
+			}
+		} else if (active) {
+			this.currentEl.show();
+			const status = active.status;
+			this.currentEl.dataset.status = status;
+			if (status === "running") {
+				setIcon(this.currentIconEl, "loader");
+			} else if (status === "pending") {
+				setIcon(this.currentIconEl, "circle-dashed");
+			} else if (status === "error") {
+				setIcon(this.currentIconEl, "x");
+			} else {
+				setIcon(this.currentIconEl, "check");
+			}
+			this.currentTextEl.setText(formatCurrentActivity(active));
+		} else {
+			this.currentEl.hide();
+		}
 	}
 }

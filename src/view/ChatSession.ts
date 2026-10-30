@@ -16,7 +16,7 @@ import { PiRpcClient } from "../rpc/PiRpcClient";
 import type { AgentMessage, AssistantMessageEvent, ExtensionUiRequest, ImageContent, RpcEvent, SessionState, SlashCommand, ToolCallContent, UserMessage } from "../rpc/types";
 import { contentText } from "../sessions";
 import { AttachmentTray, imageFilesOf, imageSrc } from "./Attachments";
-import { MarkdownBlock, ThinkingBlock, ToolCard, rerenderMarkdownIn, type RenderHost } from "./blocks";
+import { MarkdownBlock, ThinkingBlock, ToolCard, ToolGroup, rerenderMarkdownIn, type RenderHost } from "./blocks";
 import { ComposerSuggest } from "./ComposerSuggest";
 import { InlineDialogs, type DialogForm } from "./InlineDialogs";
 import { readEnabledModels, scopeModels } from "../models";
@@ -51,7 +51,7 @@ const stripAnsi = (text: string) => text.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, 
 // Electron is external to the bundle and has no types here. openPath resolves to an error message, or "".
 const { shell } = require("electron") as { shell: { openPath(path: string): Promise<string> } };
 
-type Block = MarkdownBlock | ThinkingBlock | ToolCard;
+type Block = MarkdownBlock | ThinkingBlock | ToolCard | ToolGroup;
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 const imagesOf = (message: UserMessage): ImageContent[] =>
@@ -71,6 +71,7 @@ interface HeldMessage {
 interface LiveAssistant {
 	el: HTMLElement;
 	blocks: Map<number, Block>;
+	texts: string[];
 }
 
 // What a tab is up to, as the switcher shows it. "unloaded" is a tab brought back from the
@@ -124,6 +125,7 @@ export class ChatSession {
 
 	private live: LiveAssistant | null = null;
 	private toolCards = new Map<string, ToolCard>();
+	private currentToolGroup: ToolGroup | null = null;
 	// Files as they were before pi's edit and write tools touched them, by tool call.
 	private snapshots = new Map<string, FileSnapshot>();
 	private widgets = new Map<string, { lines: string[]; below: boolean }>();
@@ -613,6 +615,8 @@ export class ChatSession {
 		this.setBusy(false);
 		this.setCompacting(false);
 		this.dialogs.drop();
+		this.settleToolGroup();
+		this.live = null;
 		if (info.expected) return;
 		this.showBanner(`pi exited${info.code === null ? "" : ` with code ${info.code}`}`, info.stderr.split("\n").slice(-12).join("\n"), {
 			label: "Restart",
@@ -1083,19 +1087,33 @@ export class ChatSession {
 			case "agent_settled":
 				if (!this.host.isShowing(this)) this.unread = true;
 				this.setBusy(false);
+				this.settleToolGroup();
+				this.live = null;
 				void this.refreshStats();
 				break;
 			case "message_start":
-				if (e.message.role === "user") this.renderUser(e.message as UserMessage);
-				else if (e.message.role === "assistant") this.live = this.beginAssistant();
+				if (e.message.role === "user") {
+					this.settleToolGroup();
+					this.live = null;
+					this.renderUser(e.message as UserMessage);
+				} else if (e.message.role === "assistant") {
+					this.live = this.beginAssistant();
+				}
 				break;
 			case "message_update":
 				this.onDelta(e.assistantMessageEvent);
 				break;
 			case "message_end":
 				if (e.message.role === "assistant") {
-					this.finishAssistant(this.live ?? this.beginAssistant(), e.message as AssistantMessage);
-					this.live = null;
+					const live = this.live ?? this.beginAssistant();
+					this.finishAssistant(live, e.message as AssistantMessage);
+					const isToolTurn =
+						e.message.stopReason === "toolUse" ||
+						(e.message as AssistantMessage).content.some((b) => b.type === "toolCall");
+					if (!isToolTurn) {
+						this.settleToolGroup();
+						this.live = null;
+					}
 				}
 				break;
 			case "tool_execution_start":
@@ -1163,6 +1181,7 @@ export class ChatSession {
 		const live = (this.live ??= this.beginAssistant());
 		switch (d.type) {
 			case "text_start":
+				this.settleToolGroup();
 				live.blocks.set(d.contentIndex, this.textBlock(live));
 				break;
 			case "text_delta":
@@ -1266,15 +1285,28 @@ export class ChatSession {
 	private renderTranscript(messages: AgentMessage[]): void {
 		this.messagesEl.empty();
 		this.toolCards.clear();
+		this.settleToolGroup();
 		this.live = null;
 		// Whatever was pending belonged to the session that just went away.
 		this.dialogs.cancelAll();
 		this.side.reset();
 		let tasks: ReturnType<typeof tasksFrom> = null;
 		for (const m of messages) {
-			if (m.role === "user") this.renderUser(m as UserMessage);
-			else if (m.role === "assistant") this.finishAssistant(this.beginAssistant(), m as AssistantMessage);
-			else if (m.role === "toolResult") {
+			if (m.role === "user") {
+				this.settleToolGroup();
+				this.live = null;
+				this.renderUser(m as UserMessage);
+			} else if (m.role === "assistant") {
+				const live = this.beginAssistant();
+				this.finishAssistant(live, m as AssistantMessage);
+				const isToolTurn =
+					(m as AssistantMessage).stopReason === "toolUse" ||
+					(m as AssistantMessage).content.some((b) => b.type === "toolCall");
+				if (!isToolTurn) {
+					this.settleToolGroup();
+					this.live = null;
+				}
+			} else if (m.role === "toolResult") {
 				const r = m as Extract<AgentMessage, { role: "toolResult" }>;
 				const card = this.cardFor(r.toolCallId, r.toolName);
 				card.setResult(r, r.isError);
@@ -1283,6 +1315,8 @@ export class ChatSession {
 				if (r.toolName === "todo" && !r.isError) tasks = tasksFrom(r.details) ?? tasks;
 			}
 		}
+		this.settleToolGroup();
+		this.live = null;
 		this.todos.set(tasks);
 		if (this.client.running) {
 			void this.client.getEntries().then(({ entries }) => {
@@ -1324,6 +1358,8 @@ export class ChatSession {
 	}
 
 	private renderUser(message: UserMessage): void {
+		this.settleToolGroup();
+		this.live = null;
 		const { text, notePath, hasSelection } = splitContext(contentText(message.content));
 		if (!this.firstPrompt) {
 			this.firstPrompt = text.replace(/\s+/g, " ").trim().slice(0, 60);
@@ -1388,7 +1424,26 @@ export class ChatSession {
 	}
 
 	private beginAssistant(): LiveAssistant {
-		return { el: this.addMessageEl("pi-msg-assistant"), blocks: new Map() };
+		const last = this.messagesEl.lastElementChild as HTMLElement | null;
+		if (last?.classList.contains("pi-msg-assistant") && this.live?.el === last) {
+			return this.live;
+		}
+		return (this.live = { el: this.addMessageEl("pi-msg-assistant"), blocks: new Map(), texts: [] });
+	}
+
+	private settleToolGroup(): void {
+		const group = this.currentToolGroup;
+		this.currentToolGroup = null;
+		group?.settle();
+	}
+
+	private ensureToolGroup(parent?: HTMLElement): ToolGroup {
+		if (this.currentToolGroup && this.currentToolGroup.el.isConnected) {
+			return this.currentToolGroup;
+		}
+		const container = parent ?? this.live?.el ?? this.beginAssistant().el;
+		this.currentToolGroup = new ToolGroup(container, this.renderHost);
+		return this.currentToolGroup;
 	}
 
 	private textBlock(live: LiveAssistant): MarkdownBlock {
@@ -1400,6 +1455,7 @@ export class ChatSession {
 		message.content.forEach((block, i) => {
 			const existing = live.blocks.get(i);
 			if (block.type === "text") {
+				this.settleToolGroup();
 				const md = (existing as MarkdownBlock | undefined) ?? this.textBlock(live);
 				live.blocks.set(i, md);
 				md.set(block.text);
@@ -1419,7 +1475,9 @@ export class ChatSession {
 		}
 		live.el.querySelector(".pi-msg-actions")?.remove();
 		const text = markdownOf(message.content);
-		if (text) this.renderMessageActions(live.el, text);
+		if (text && !live.texts.includes(text)) live.texts.push(text);
+		const fullText = live.texts.join("\n\n");
+		if (fullText) this.renderMessageActions(live.el, fullText);
 		if (!live.el.childElementCount) live.el.remove();
 		this.keepScrolled();
 	}
@@ -1444,8 +1502,8 @@ export class ChatSession {
 	private cardFor(id: string, name: string, args?: Record<string, unknown>, parent?: HTMLElement): ToolCard {
 		let card = this.toolCards.get(id);
 		if (!card) {
-			const container = parent ?? this.live?.el ?? this.addMessageEl("pi-msg-assistant");
-			card = new ToolCard(container, this.renderHost, name, this.plugin.settings.expandTools, {
+			const group = this.ensureToolGroup(parent);
+			card = new ToolCard(group.cardContainer, this.renderHost, name, this.plugin.settings.expandTools, {
 				open: (p, newLeaf) => this.openVaultPath(p, newLeaf),
 				absolute: (p) => this.absolutePath(p),
 				openExternally: async (p) => {
@@ -1454,6 +1512,7 @@ export class ChatSession {
 					return (await shell.openPath(file)) || null;
 				},
 			});
+			group.addCard(card);
 			this.toolCards.set(id, card);
 		}
 		if (args) card.setArgs(args);
