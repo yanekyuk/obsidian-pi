@@ -213,14 +213,14 @@
 .pi-tool-group {
 	display: flex;
 	flex-direction: column;
-	gap: var(--size-2-2);
-	margin: var(--size-2-1) 0;
+	gap: var(--size-4-2);
+	margin: var(--size-4-1) 0;
 }
 
 .pi-tool-group-header {
 	display: flex;
 	flex-direction: column;
-	gap: var(--size-2-1);
+	gap: var(--size-2-3);
 }
 
 .pi-tool-group-prev {
@@ -229,13 +229,14 @@
 	gap: var(--size-2-2);
 	align-self: flex-start;
 	max-width: 100%;
-	padding: var(--size-2-1) var(--size-2-3);
-	border-radius: var(--radius-s);
+	padding: var(--size-2-2) var(--size-4-2);
+	border-radius: var(--radius-m);
 	border: 1px solid var(--background-modifier-border);
 	background: var(--background-secondary);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	font-family: var(--font-interface);
+	line-height: var(--line-height-tight);
 	cursor: pointer;
 	text-align: left;
 	transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
@@ -299,8 +300,9 @@
 	display: flex;
 	align-items: center;
 	gap: var(--size-2-2);
-	padding: var(--size-1-2) var(--size-2-2);
+	padding: var(--size-1-2) var(--size-2-1);
 	font-size: var(--font-ui-smaller);
+	line-height: var(--line-height-normal);
 	color: var(--text-muted);
 }
 
@@ -341,7 +343,7 @@
 .pi-tool-group-previous {
 	display: flex;
 	flex-direction: column;
-	gap: var(--size-2-2);
+	gap: var(--size-2-3);
 }
 
 .pi-tool-group-previous.is-collapsed {
@@ -351,7 +353,7 @@
 .pi-tool-group-active {
 	display: flex;
 	flex-direction: column;
-	gap: var(--size-2-2);
+	gap: var(--size-2-3);
 }
 
 /* ---- tool calls ---- */
