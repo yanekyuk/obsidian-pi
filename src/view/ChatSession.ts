@@ -1181,12 +1181,20 @@ export class ChatSession {
 		const live = (this.live ??= this.beginAssistant());
 		switch (d.type) {
 			case "text_start":
-				this.settleToolGroup();
-				live.blocks.set(d.contentIndex, this.textBlock(live));
+				// Wait for text_delta before settling tool group or creating markdown block,
+				// as models often emit an empty text block alongside tool calls.
 				break;
-			case "text_delta":
-				(live.blocks.get(d.contentIndex) as MarkdownBlock | undefined)?.append(d.delta);
+			case "text_delta": {
+				if (!d.delta) break;
+				let md = live.blocks.get(d.contentIndex) as MarkdownBlock | undefined;
+				if (!md) {
+					this.settleToolGroup();
+					md = this.textBlock(live);
+					live.blocks.set(d.contentIndex, md);
+				}
+				md.append(d.delta);
 				break;
+			}
 			case "thinking_start":
 				if (this.plugin.settings.showThinking) live.blocks.set(d.contentIndex, new ThinkingBlock(this.renderHost, live.el));
 				break;
@@ -1425,8 +1433,9 @@ export class ChatSession {
 
 	private beginAssistant(): LiveAssistant {
 		const last = this.messagesEl.lastElementChild as HTMLElement | null;
-		if (last?.classList.contains("pi-msg-assistant") && this.live?.el === last) {
-			return this.live;
+		if (last?.classList.contains("pi-msg-assistant")) {
+			if (this.live && this.live.el === last) return this.live;
+			return (this.live = { el: last, blocks: new Map(), texts: [] });
 		}
 		return (this.live = { el: this.addMessageEl("pi-msg-assistant"), blocks: new Map(), texts: [] });
 	}
@@ -1455,6 +1464,8 @@ export class ChatSession {
 		message.content.forEach((block, i) => {
 			const existing = live.blocks.get(i);
 			if (block.type === "text") {
+				const trimmed = block.text.trim();
+				if (!trimmed) return;
 				this.settleToolGroup();
 				const md = (existing as MarkdownBlock | undefined) ?? this.textBlock(live);
 				live.blocks.set(i, md);

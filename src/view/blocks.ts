@@ -166,7 +166,7 @@ function actionNameOf(toolName: string, args: Record<string, unknown>): string {
 		first = first.replace(/^.*[/\\]/, "");
 		return first || "bash";
 	}
-	return toolName;
+	return TOOL_RENDERERS[toolName]?.label ?? toolName;
 }
 
 function formatPreviousSummary(cards: ToolCard[]): string {
