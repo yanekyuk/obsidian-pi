@@ -1196,9 +1196,16 @@ export class ChatSession {
 				md.append(d.delta);
 				break;
 			}
-			case "thinking_start":
-				if (this.plugin.settings.showThinking) live.blocks.set(d.contentIndex, new ThinkingBlock(this.renderHost, live.el));
+			case "thinking_start": {
+				if (this.plugin.settings.showThinking) {
+					const block = new ThinkingBlock(this.renderHost, live.el);
+					live.blocks.set(d.contentIndex, block);
+					if (this.currentToolGroup) {
+						this.currentToolGroup.attachThinking(block);
+					}
+				}
 				break;
+			}
 			case "thinking_delta": {
 				const block = live.blocks.get(d.contentIndex);
 				if (block instanceof ThinkingBlock) block.append(d.delta);
@@ -1479,6 +1486,9 @@ export class ChatSession {
 				const thinking = (existing instanceof ThinkingBlock ? existing : undefined) ?? new ThinkingBlock(this.renderHost, live.el);
 				live.blocks.set(i, thinking);
 				thinking.finish(block.thinking);
+				if (this.currentToolGroup) {
+					this.currentToolGroup.attachThinking(thinking);
+				}
 			} else if (block.type === "toolCall") {
 				const call = block as ToolCallContent;
 				live.blocks.set(i, this.cardFor(call.id, call.name, call.arguments, live.el));
@@ -1528,8 +1538,23 @@ export class ChatSession {
 					return (await shell.openPath(file)) || null;
 				},
 			});
-			group.addCard(card);
+			const thinking = this.live
+				? Array.from(this.live.blocks.values()).find(
+						(b): b is ThinkingBlock => b instanceof ThinkingBlock && !group.hasThinking(b),
+				  )
+				: undefined;
+			group.addCard(card, thinking);
 			this.toolCards.set(id, card);
+		} else {
+			const group = this.currentToolGroup;
+			if (group && this.live) {
+				const thinking = Array.from(this.live.blocks.values()).find(
+					(b): b is ThinkingBlock => b instanceof ThinkingBlock && !group.hasThinking(b),
+				);
+				if (thinking) {
+					group.addCard(card, thinking);
+				}
+			}
 		}
 		if (args) card.setArgs(args);
 		return card;

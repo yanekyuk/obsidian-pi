@@ -115,6 +115,10 @@ export class ThinkingBlock {
 		this.body = new MarkdownBlock(host, this.details.createDiv({ cls: "pi-thinking-body markdown-rendered" }));
 	}
 
+	get el(): HTMLElement {
+		return this.details;
+	}
+
 	append(delta: string): void {
 		this.body.append(delta);
 	}
@@ -442,6 +446,11 @@ export class ToolCard {
 	}
 }
 
+interface ToolEntry {
+	card: ToolCard;
+	thinking?: ThinkingBlock;
+}
+
 export class ToolGroup {
 	readonly el: HTMLElement;
 	private headerEl: HTMLElement;
@@ -457,8 +466,8 @@ export class ToolGroup {
 	readonly previousContainer: HTMLElement;
 	readonly activeContainer: HTMLElement;
 
-	private cards: ToolCard[] = [];
-	private activeCard: ToolCard | null = null;
+	private entries: ToolEntry[] = [];
+	private activeEntry: ToolEntry | null = null;
 	private isExpanded = false;
 	private isSettled = false;
 
@@ -502,6 +511,18 @@ export class ToolGroup {
 		return this.activeContainer;
 	}
 
+	get cards(): ToolCard[] {
+		return this.entries.map((e) => e.card);
+	}
+
+	get activeCard(): ToolCard | null {
+		return this.activeEntry?.card ?? null;
+	}
+
+	hasThinking(thinking: ThinkingBlock): boolean {
+		return this.entries.some((e) => e.thinking === thinking);
+	}
+
 	toggleExpanded(): void {
 		this.isExpanded = !this.isExpanded;
 		this.previousContainer.toggleClass("is-collapsed", !this.isExpanded);
@@ -511,21 +532,43 @@ export class ToolGroup {
 		this.host.onContentChanged();
 	}
 
-	addCard(card: ToolCard): void {
-		if (this.cards.includes(card)) return;
-
-		// Move former active card to previous container
-		if (this.activeCard && this.activeCard !== card) {
-			this.previousContainer.appendChild(this.activeCard.el);
+	addCard(card: ToolCard, thinking?: ThinkingBlock): void {
+		const existing = this.entries.find((e) => e.card === card);
+		if (existing) {
+			if (thinking && !existing.thinking) {
+				existing.thinking = thinking;
+				card.el.parentElement?.insertBefore(thinking.el, card.el);
+			}
+			return;
 		}
 
-		this.cards.push(card);
-		this.activeCard = card;
+		// Move former active entry to previous container
+		if (this.activeEntry && this.activeEntry.card !== card) {
+			if (this.activeEntry.thinking) {
+				this.previousContainer.appendChild(this.activeEntry.thinking.el);
+			}
+			this.previousContainer.appendChild(this.activeEntry.card.el);
+		}
+
+		const entry: ToolEntry = { card, thinking };
+		this.entries.push(entry);
+		this.activeEntry = entry;
+
+		if (thinking) {
+			this.activeContainer.appendChild(thinking.el);
+		}
 		this.activeContainer.appendChild(card.el);
 
 		card.onUpdate(() => this.updateView());
 		this.updateView();
 		this.host.onContentChanged();
+	}
+
+	attachThinking(thinking: ThinkingBlock): void {
+		if (this.activeEntry && !this.activeEntry.thinking) {
+			this.activeEntry.thinking = thinking;
+			this.activeContainer.insertBefore(thinking.el, this.activeEntry.card.el);
+		}
 	}
 
 	settle(): void {
@@ -534,7 +577,8 @@ export class ToolGroup {
 	}
 
 	updateView(): void {
-		const total = this.cards.length;
+		const cards = this.cards;
+		const total = cards.length;
 		if (total === 0) {
 			this.headerEl.hide();
 			return;
@@ -546,7 +590,7 @@ export class ToolGroup {
 		// 1. Previous calls expander
 		if (prevCount > 0) {
 			this.prevBtn.show();
-			const prevCards = this.cards.slice(0, prevCount);
+			const prevCards = cards.slice(0, prevCount);
 			const failedCount = prevCards.filter((c) => c.status === "error").length;
 			const failedText = failedCount > 0 ? ` (${failedCount} failed)` : "";
 			this.prevCountEl.setText(`${prevCount} ${prevCount === 1 ? "call" : "calls"}${failedText}`);
@@ -562,7 +606,7 @@ export class ToolGroup {
 		if (this.isSettled) {
 			if (total > 1) {
 				this.currentEl.show();
-				const errorCount = this.cards.filter((c) => c.status === "error").length;
+				const errorCount = cards.filter((c) => c.status === "error").length;
 				if (errorCount > 0) {
 					setIcon(this.currentIconEl, "alert-circle");
 					this.currentEl.dataset.status = "error";
