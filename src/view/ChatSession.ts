@@ -1112,8 +1112,8 @@ export class ChatSession {
 						(e.message as AssistantMessage).content.some((b) => b.type === "toolCall");
 					if (!isToolTurn) {
 						this.settleToolGroup();
-						this.live = null;
 					}
+					this.live = null;
 				}
 				break;
 			case "tool_execution_start":
@@ -1186,7 +1186,8 @@ export class ChatSession {
 				break;
 			case "text_delta": {
 				if (!d.delta) break;
-				let md = live.blocks.get(d.contentIndex) as MarkdownBlock | undefined;
+				const existing = live.blocks.get(d.contentIndex);
+				let md = existing instanceof MarkdownBlock ? existing : undefined;
 				if (!md) {
 					this.settleToolGroup();
 					md = this.textBlock(live);
@@ -1198,12 +1199,16 @@ export class ChatSession {
 			case "thinking_start":
 				if (this.plugin.settings.showThinking) live.blocks.set(d.contentIndex, new ThinkingBlock(this.renderHost, live.el));
 				break;
-			case "thinking_delta":
-				(live.blocks.get(d.contentIndex) as ThinkingBlock | undefined)?.append(d.delta);
+			case "thinking_delta": {
+				const block = live.blocks.get(d.contentIndex);
+				if (block instanceof ThinkingBlock) block.append(d.delta);
 				break;
-			case "thinking_end":
-				(live.blocks.get(d.contentIndex) as ThinkingBlock | undefined)?.finish();
+			}
+			case "thinking_end": {
+				const block = live.blocks.get(d.contentIndex);
+				if (block instanceof ThinkingBlock) block.finish();
 				break;
+			}
 			case "toolcall_start":
 				live.blocks.set(d.contentIndex, this.cardFor(d.id, d.toolName));
 				break;
@@ -1312,8 +1317,8 @@ export class ChatSession {
 					(m as AssistantMessage).content.some((b) => b.type === "toolCall");
 				if (!isToolTurn) {
 					this.settleToolGroup();
-					this.live = null;
 				}
+				this.live = null;
 			} else if (m.role === "toolResult") {
 				const r = m as Extract<AgentMessage, { role: "toolResult" }>;
 				const card = this.cardFor(r.toolCallId, r.toolName);
@@ -1433,9 +1438,9 @@ export class ChatSession {
 
 	private beginAssistant(): LiveAssistant {
 		const last = this.messagesEl.lastElementChild as HTMLElement | null;
+		const texts = this.live?.el === last ? this.live.texts : [];
 		if (last?.classList.contains("pi-msg-assistant")) {
-			if (this.live && this.live.el === last) return this.live;
-			return (this.live = { el: last, blocks: new Map(), texts: [] });
+			return (this.live = { el: last, blocks: new Map(), texts });
 		}
 		return (this.live = { el: this.addMessageEl("pi-msg-assistant"), blocks: new Map(), texts: [] });
 	}
@@ -1467,11 +1472,11 @@ export class ChatSession {
 				const trimmed = block.text.trim();
 				if (!trimmed) return;
 				this.settleToolGroup();
-				const md = (existing as MarkdownBlock | undefined) ?? this.textBlock(live);
+				const md = (existing instanceof MarkdownBlock ? existing : undefined) ?? this.textBlock(live);
 				live.blocks.set(i, md);
 				md.set(block.text);
 			} else if (block.type === "thinking" && this.plugin.settings.showThinking) {
-				const thinking = (existing as ThinkingBlock | undefined) ?? new ThinkingBlock(this.renderHost, live.el);
+				const thinking = (existing instanceof ThinkingBlock ? existing : undefined) ?? new ThinkingBlock(this.renderHost, live.el);
 				live.blocks.set(i, thinking);
 				thinking.finish(block.thinking);
 			} else if (block.type === "toolCall") {

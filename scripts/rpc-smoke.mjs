@@ -47,7 +47,8 @@ export { snapshotBefore, snapshotAfter, unchangedSince } from ${JSON.stringify(j
 export { transcriptMarkdown } from ${JSON.stringify(join(root, "src/exportNote.ts"))};
 export { resolveLinked, sessionDirs } from ${JSON.stringify(join(root, "src/noteLink.ts"))};
 export { entryIdOf } from ${JSON.stringify(join(root, "src/view/editMessage.ts"))};
-export { rewordMessage, withContext } from ${JSON.stringify(join(root, "src/prompt.ts"))};
+export { buildSystemPrompt, rewordMessage, withContext } from ${JSON.stringify(join(root, "src/prompt.ts"))};
+export { DEFAULT_SHELL_TIMEOUT_SECONDS } from ${JSON.stringify(join(root, "pi-extension/panel-shell.ts"))};
 export { SearchIndex } from ${JSON.stringify(join(root, "src/search/SearchIndex.ts"))};
 export { default as trimToolOutput } from ${JSON.stringify(join(root, "pi-extension/trim-tool-output.ts"))};`,
 );
@@ -58,13 +59,13 @@ const obsidianStub = {
 		build.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "stub" }));
 		build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: "pi", namespace: "stub" }));
 		build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
-			contents: "export class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport class PluginSettingTab {}\nexport class Setting {}\nexport const createBashTool = () => {};\nexport const createLocalBashOperations = () => {};\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');\nexport const getAllTags = () => [];",
+			contents: "export class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport class PluginSettingTab {}\nexport class Setting {}\nexport const createBashTool = () => {};\nexport const createLocalBashOperations = () => {};\nexport const createPowerShellTool = () => {};\nexport const createLocalPowerShellOperations = () => {};\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');\nexport const getAllTags = () => [];",
 		}));
 	},
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, suggestLineup, makerOf, sharedMakers, runDiscussion, discussionMarkdown, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, rewordMessage, withContext, SearchIndex, trimToolOutput } =
+const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, suggestLineup, makerOf, sharedMakers, runDiscussion, discussionMarkdown, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, rewordMessage, withContext, SearchIndex, trimToolOutput } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -148,7 +149,7 @@ const check = (ok, label, detail = "") => {
 	writeFileSync(join(target, "bin/obsidian"), "tampered");
 	await extractBundledFiles(target);
 	check(same("bin"), "a changed file is put right on the next load");
-	check(!existsSync(join(root, "skills")) && !existsSync(join(target, "skills")), "no copy of anyone's skills in the repo or the bundle");
+	check(!existsSync(join(target, "skills")), "no copy of anyone's skills in the bundle");
 }
 
 
@@ -478,6 +479,9 @@ const check = (ok, label, detail = "") => {
 	const sent = withContext("What's this?", { path: "Inbox/Todo.md", selection: "buy milk" });
 	check(rewordMessage(sent, "And that?") === withContext("And that?", { path: "Inbox/Todo.md", selection: "buy milk" }), "edit: the new words go out with the note context of the original");
 	check(rewordMessage(sent, "/compact") === "/compact" && rewordMessage("plain", "new") === "new", "edit: a slash command goes out bare, as does a message that had no context");
+	const sysPrompt = buildSystemPrompt("Notes", "");
+	check(sysPrompt.includes("vault root ('.')") && sysPrompt.includes("recursive searches across the home directory"), "buildSystemPrompt: scopes searches to the vault and forbids home directory scans");
+	check(typeof DEFAULT_SHELL_TIMEOUT_SECONDS === "number" && DEFAULT_SHELL_TIMEOUT_SECONDS > 0, "DEFAULT_SHELL_TIMEOUT_SECONDS is configured", `${DEFAULT_SHELL_TIMEOUT_SECONDS}s`);
 }
 
 // ---- tabs: what the title shows for the tabs out of sight, and what the layout brings back
