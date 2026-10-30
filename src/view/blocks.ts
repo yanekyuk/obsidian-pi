@@ -102,30 +102,87 @@ export class MarkdownBlock {
 	}
 }
 
+export function extractIntentLine(raw: string): string {
+	if (!raw) return "";
+	const lines = raw
+		.split(/\r?\n/)
+		.map((l) => l.replace(/^[#*\->`\s]+/, "").replace(/[*_`~]/g, "").trim())
+		.filter(Boolean);
+	if (lines.length === 0) return "";
+	const lastLine = lines[lines.length - 1];
+	const sentences = lastLine.split(/(?<=[.!?])\s+/).filter(Boolean);
+	const candidate = (sentences[sentences.length - 1] ?? lastLine).trim();
+	return candidate.length > 90 ? candidate.slice(0, 89) + "…" : candidate;
+}
+
 export class ThinkingBlock {
 	private body: MarkdownBlock;
 	private details: HTMLDetailsElement;
+	private iconEl: HTMLElement;
 	private label: HTMLElement;
+	private rawText = "";
+	private currentStatus: "running" | "done" | "error" = "running";
+	private updateListeners: (() => void)[] = [];
 
 	constructor(host: RenderHost, parent: HTMLElement) {
 		this.details = parent.createEl("details", { cls: "pi-thinking" });
 		const summary = this.details.createEl("summary");
-		setIcon(summary.createSpan({ cls: "pi-icon" }), "brain");
-		this.label = summary.createSpan({ text: "Thinking…" });
+		this.iconEl = summary.createSpan({ cls: "pi-icon pi-thinking-icon" });
+		this.label = summary.createSpan({ cls: "pi-thinking-summary", text: "Thinking…" });
 		this.body = new MarkdownBlock(host, this.details.createDiv({ cls: "pi-thinking-body markdown-rendered" }));
+		this.setStatus("running");
 	}
 
 	get el(): HTMLElement {
 		return this.details;
 	}
 
-	append(delta: string): void {
-		this.body.append(delta);
+	get status(): "running" | "done" | "error" {
+		return this.currentStatus;
 	}
 
-	finish(text?: string): void {
-		if (text !== undefined) this.body.set(text);
-		this.label.setText("Thought");
+	get text(): string {
+		return this.rawText;
+	}
+
+	get summaryLine(): string {
+		return extractIntentLine(this.rawText);
+	}
+
+	onUpdate(listener: () => void): void {
+		this.updateListeners.push(listener);
+	}
+
+	private notifyUpdate(): void {
+		for (const l of this.updateListeners) l();
+	}
+
+	private setStatus(status: "running" | "done" | "error"): void {
+		this.currentStatus = status;
+		this.details.dataset.status = status;
+		this.iconEl.empty();
+		setIcon(this.iconEl, status === "running" ? "loader" : status === "error" ? "x" : "brain");
+	}
+
+	append(delta: string): void {
+		this.rawText += delta;
+		this.body.append(delta);
+		const line = this.summaryLine;
+		this.label.setText(line || "Thinking…");
+		this.label.setAttr("title", line);
+		this.notifyUpdate();
+	}
+
+	finish(text?: string, isError = false): void {
+		if (text !== undefined) {
+			this.rawText = text;
+			this.body.set(text);
+		}
+		this.setStatus(isError ? "error" : "done");
+		const line = this.summaryLine;
+		this.label.setText(line || "Thought");
+		this.label.setAttr("title", line);
+		this.notifyUpdate();
 	}
 }
 
@@ -167,33 +224,25 @@ function actionNameOf(toolName: string, args: Record<string, unknown>): string {
 		const tokens = cmd.split(/\s+/).filter((t) => !t.includes("=") && !t.startsWith("-"));
 		let first = tokens[0] ?? "";
 		if (first === "sudo" && tokens[1]) first = tokens[1];
+		if ((first === "python" || first === "python3" || first === "node" || first === "sh" || first === "bash") && tokens[1]) {
+			first = tokens[1];
+		}
 		first = first.replace(/^.*[/\\]/, "");
 		return first || "bash";
 	}
 	return TOOL_RENDERERS[toolName]?.label ?? toolName;
 }
 
-function formatPreviousSummary(cards: ToolCard[]): string {
+function formatToolsSummary(cards: ToolCard[]): string {
 	if (cards.length === 0) return "";
-	if (cards.length === 1) {
-		const c = cards[0];
-		const summary = c.summaryLine;
-		if (summary && summary !== c.actionLabel) {
-			const shortSummary = summary.length > 40 ? summary.slice(0, 37) + "…" : summary;
-			return `${c.actionLabel} (${shortSummary})`;
-		}
-		return c.actionLabel;
-	}
-
 	const counts = new Map<string, number>();
 	for (const c of cards) {
 		const key = c.actionLabel;
 		counts.set(key, (counts.get(key) ?? 0) + 1);
 	}
-
 	const parts: string[] = [];
 	for (const [key, count] of counts.entries()) {
-		parts.push(count > 1 ? `${key} (×${count})` : key);
+		parts.push(count > 1 ? `${key} ×${count}` : key);
 	}
 	return parts.join(", ");
 }
@@ -203,45 +252,24 @@ export function formatActivityText(toolName: string, args?: Record<string, unkno
 	const { text, path } = summarize(toolName, args);
 	const short = (s: string, max = 50) => (s.length > max ? s.slice(0, max - 1) + "…" : s);
 	switch (toolName) {
-		case "bash":
-			return text ? `Running: ${short(text)}` : "Running command…";
+		case "bash": {
+			const act = actionNameOf(toolName, args);
+			return act && act !== "bash" ? `Running ${act}…` : text ? `Running ${short(text, 40)}…` : "Running command…";
+		}
 		case "read":
-			return path ? `Reading ${short(path)}…` : "Reading file…";
+			return path ? `Reading ${short(path.replace(/^.*[/\\]/, ""))}…` : "Reading note…";
 		case "edit":
-			return path ? `Editing ${short(path)}…` : "Editing file…";
+			return path ? `Editing ${short(path.replace(/^.*[/\\]/, ""))}…` : "Editing note…";
 		case "write":
-			return path ? `Writing ${short(path)}…` : "Writing file…";
+			return path ? `Writing ${short(path.replace(/^.*[/\\]/, ""))}…` : "Writing note…";
 		case "grep":
 		case "find":
-			return text ? `Searching: ${short(text)}` : "Searching…";
-		default:
-			return text ? `${toolName}: ${short(text)}` : `Running ${toolName}…`;
+			return text ? `Searching for ${short(text)}…` : "Searching vault…";
+		default: {
+			const label = TOOL_RENDERERS[toolName]?.label ?? toolName.replace(/_/g, " ");
+			return text ? `${label}: ${short(text)}` : `Running ${label}…`;
+		}
 	}
-}
-
-function formatCurrentActivity(active: ToolCard): string {
-	const name = active.toolName;
-	const summary = active.summaryLine;
-	const status = active.status;
-
-	if (status === "running") {
-		if (name === "bash") return summary ? `Running: ${summary}` : "Running command…";
-		if (name === "read") return `Reading ${summary || "file"}…`;
-		if (name === "edit") return `Editing ${summary || "file"}…`;
-		if (name === "write") return `Writing ${summary || "file"}…`;
-		if (name === "grep" || name === "find") return `Searching: ${summary}…`;
-		return summary ? `Running ${name}: ${summary}` : `Running ${name}…`;
-	}
-
-	if (status === "pending") {
-		return `Calling ${name}…`;
-	}
-
-	if (status === "error") {
-		return `Failed: ${name}${summary ? ` (${summary})` : ""}`;
-	}
-
-	return `Done: ${name}${summary ? ` (${summary})` : ""}`;
 }
 
 export class ToolCard {
@@ -328,15 +356,12 @@ export class ToolCard {
 		const isImage = imageTypeOf(path) !== null;
 		const link = this.summaryEl.createEl("a", { cls: "pi-tool-path", text });
 		link.addEventListener("click", (evt) => {
-			// Only swallow the click when it did something; otherwise let it toggle the card.
 			const opened = this.files.open(path, evt.metaKey || evt.ctrlKey);
 			if (!opened && !isImage) return;
 			evt.preventDefault();
 			evt.stopPropagation();
-			// A picture outside the vault can't open in Obsidian, so it is shown here instead.
 			if (!opened) void this.showImage(path);
 		});
-		// Inside <summary>, so each button keeps its click from also folding the card.
 		const button = (icon: string, label: string, run: (evt: MouseEvent) => void) => {
 			const el = this.summaryEl.createEl("button", { cls: "pi-tool-action clickable-icon", attr: { "aria-label": label } });
 			setIcon(el, icon);
@@ -351,9 +376,6 @@ export class ToolCard {
 		this.notifyUpdate();
 	}
 
-	// A tool's own presentation is a nicety: when it chokes on a result it didn't expect (an old
-	// session, a changed extension), the card falls back to the plain one instead of taking the
-	// whole transcript down with it.
 	private safely<T>(render: () => T): T | null {
 		try {
 			return render();
@@ -363,14 +385,12 @@ export class ToolCard {
 		}
 	}
 
-	// In Obsidian when the file is in the vault, otherwise in whatever the system opens it with.
 	private async openFile(path: string, newLeaf: boolean): Promise<void> {
 		if (this.files.open(path, newLeaf)) return;
 		const problem = await this.files.openExternally(path);
 		if (problem) new Notice(`Couldn't open ${path}: ${problem}`);
 	}
 
-	// Opens the card on the picture: the one the tool returned, or else the file as it is on disk now.
 	private async showImage(path: string): Promise<void> {
 		this.details.open = true;
 		if (!this.resultHasImages) {
@@ -381,7 +401,6 @@ export class ToolCard {
 				if ((await fs.stat(file)).size > MAX_IMAGE_BYTES) throw new Error("the file is too large to preview");
 				const url = URL.createObjectURL(new Blob([await fs.readFile(file)], { type: imageTypeOf(path) ?? "" }));
 				const img = this.addImage(url);
-				// Once decoded the picture no longer needs the blob.
 				img.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
 				img.addEventListener("error", () => URL.revokeObjectURL(url), { once: true });
 			} catch (err) {
@@ -400,7 +419,6 @@ export class ToolCard {
 		return img;
 	}
 
-	// An undo (or, once undone, redo) button for an edit the panel can take back.
 	setRevert(state: "applied" | "reverted" | null, run?: () => void): void {
 		this.revertEl?.remove();
 		this.revertNoteEl?.remove();
@@ -428,7 +446,6 @@ export class ToolCard {
 
 	setResult(result: ToolResult | undefined, isError = false): void {
 		this.renderOutput(result, isError);
-		// Pictures a tool returns (read on an image file, a screenshot from an MCP server) go under its output.
 		const images = (result?.content ?? []).filter((block): block is ImageContent => block.type === "image");
 		this.resultHasImages = images.length > 0;
 		this.imagesEl?.remove();
@@ -441,7 +458,6 @@ export class ToolCard {
 		const diff = !isError && typeof result?.details?.diff === "string" ? result.details.diff : null;
 		this.outputEl?.remove();
 		if (this.renderer && result) {
-			// Some summaries only make sense once the result is in (a task's name, a result count).
 			this.setArgs(this.args, result);
 			if (!isError && this.renderer.body) {
 				this.outputEl = this.bodyEl.createDiv();
@@ -467,27 +483,17 @@ export class ToolCard {
 	}
 }
 
-interface ToolEntry {
-	card: ToolCard;
-	thinking?: ThinkingBlock;
-}
-
 export class ToolGroup {
 	readonly el: HTMLElement;
 	private headerEl: HTMLElement;
-	private prevBtn: HTMLButtonElement;
-	private prevChevronEl: HTMLElement;
-	private prevCountEl: HTMLElement;
+	private statusIconEl: HTMLElement;
+	private titleEl: HTMLElement;
+	private metaEl: HTMLElement;
+	private chevronEl: HTMLElement;
+	readonly bodyEl: HTMLElement;
 
-	private currentEl: HTMLElement;
-	private currentIconEl: HTMLElement;
-	private currentTextEl: HTMLElement;
-
-	readonly previousContainer: HTMLElement;
-	readonly activeContainer: HTMLElement;
-
-	private entries: ToolEntry[] = [];
-	private activeEntry: ToolEntry | null = null;
+	private cards: ToolCard[] = [];
+	private thinkings: ThinkingBlock[] = [];
 	private isExpanded = false;
 	private isSettled = false;
 
@@ -497,95 +503,71 @@ export class ToolGroup {
 	) {
 		this.el = parent.createDiv({ cls: "pi-tool-group" });
 
-		this.headerEl = this.el.createDiv({ cls: "pi-tool-group-header" });
-
-		// Left: Current activity
-		this.currentEl = this.headerEl.createDiv({ cls: "pi-tool-group-current" });
-		this.currentIconEl = this.currentEl.createSpan({ cls: "pi-tool-group-current-icon pi-icon" });
-		this.currentTextEl = this.currentEl.createSpan({ cls: "pi-tool-group-current-text" });
-
-		// Right: Previous calls expander button
-		this.prevBtn = this.headerEl.createEl("button", {
-			cls: "pi-tool-group-prev clickable",
-			attr: { "aria-expanded": "false" },
+		this.headerEl = this.el.createDiv({
+			cls: "pi-tool-group-header",
+			attr: { role: "button", tabindex: "0", "aria-expanded": "false" },
 		});
-		this.prevCountEl = this.prevBtn.createSpan({ cls: "pi-tool-group-prev-count" });
-		this.prevChevronEl = this.prevBtn.createSpan({ cls: "pi-tool-group-chevron pi-icon" });
-		setIcon(this.prevChevronEl, "chevron-down");
-		this.prevBtn.addEventListener("click", (evt) => {
+
+		this.statusIconEl = this.headerEl.createSpan({ cls: "pi-tool-group-status pi-icon" });
+		this.titleEl = this.headerEl.createSpan({ cls: "pi-tool-group-title" });
+		this.metaEl = this.headerEl.createSpan({ cls: "pi-tool-group-meta" });
+		this.chevronEl = this.headerEl.createSpan({ cls: "pi-tool-group-chevron pi-icon" });
+		setIcon(this.chevronEl, "chevron-right");
+
+		this.headerEl.addEventListener("click", (evt) => {
 			evt.preventDefault();
 			this.toggleExpanded();
 		});
+		this.headerEl.addEventListener("keydown", (evt) => {
+			if (evt.key === "Enter" || evt.key === " ") {
+				evt.preventDefault();
+				this.toggleExpanded();
+			}
+		});
 
-		// Containers
-		this.previousContainer = this.el.createDiv({ cls: "pi-tool-group-previous is-collapsed" });
-		this.activeContainer = this.el.createDiv({ cls: "pi-tool-group-active" });
+		this.bodyEl = this.el.createDiv({ cls: "pi-tool-group-body is-collapsed" });
 
 		this.updateView();
 	}
 
 	get cardContainer(): HTMLElement {
-		return this.activeContainer;
-	}
-
-	get cards(): ToolCard[] {
-		return this.entries.map((e) => e.card);
-	}
-
-	get activeCard(): ToolCard | null {
-		return this.activeEntry?.card ?? null;
+		return this.bodyEl;
 	}
 
 	hasThinking(thinking: ThinkingBlock): boolean {
-		return this.entries.some((e) => e.thinking === thinking);
+		return this.thinkings.includes(thinking);
 	}
 
 	toggleExpanded(): void {
 		this.isExpanded = !this.isExpanded;
-		this.previousContainer.toggleClass("is-collapsed", !this.isExpanded);
-		this.prevBtn.setAttr("aria-expanded", String(this.isExpanded));
-		this.prevBtn.toggleClass("is-open", this.isExpanded);
+		this.bodyEl.toggleClass("is-collapsed", !this.isExpanded);
+		this.headerEl.setAttr("aria-expanded", String(this.isExpanded));
+		this.el.toggleClass("is-open", this.isExpanded);
 		this.updateView();
 		this.host.onContentChanged();
 	}
 
-	addCard(card: ToolCard, thinking?: ThinkingBlock): void {
-		const existing = this.entries.find((e) => e.card === card);
-		if (existing) {
-			if (thinking && !existing.thinking) {
-				existing.thinking = thinking;
-				card.el.parentElement?.insertBefore(thinking.el, card.el);
-			}
-			return;
-		}
-
-		// Move former active entry to previous container
-		if (this.activeEntry && this.activeEntry.card !== card) {
-			if (this.activeEntry.thinking) {
-				this.previousContainer.appendChild(this.activeEntry.thinking.el);
-			}
-			this.previousContainer.appendChild(this.activeEntry.card.el);
-		}
-
-		const entry: ToolEntry = { card, thinking };
-		this.entries.push(entry);
-		this.activeEntry = entry;
-
-		if (thinking) {
-			this.activeContainer.appendChild(thinking.el);
-		}
-		this.activeContainer.appendChild(card.el);
-
-		card.onUpdate(() => this.updateView());
+	addThinking(thinking: ThinkingBlock): void {
+		if (this.thinkings.includes(thinking)) return;
+		this.thinkings.push(thinking);
+		this.bodyEl.appendChild(thinking.el);
+		thinking.onUpdate(() => this.updateView());
 		this.updateView();
 		this.host.onContentChanged();
 	}
 
 	attachThinking(thinking: ThinkingBlock): void {
-		if (this.activeEntry && !this.activeEntry.thinking) {
-			this.activeEntry.thinking = thinking;
-			this.activeContainer.insertBefore(thinking.el, this.activeEntry.card.el);
-		}
+		this.addThinking(thinking);
+	}
+
+	addCard(card: ToolCard, thinking?: ThinkingBlock): void {
+		if (thinking) this.addThinking(thinking);
+		if (this.cards.includes(card)) return;
+		this.cards.push(card);
+		this.bodyEl.appendChild(card.el);
+		card.onUpdate(() => this.updateView());
+		this.updateView();
+		this.host.onContentChanged();
 	}
 
 	settle(): void {
@@ -593,50 +575,86 @@ export class ToolGroup {
 		this.updateView();
 	}
 
+	private latestIntent(): string {
+		for (let i = this.thinkings.length - 1; i >= 0; i--) {
+			const line = this.thinkings[i].summaryLine;
+			if (line) return line;
+		}
+		return "";
+	}
+
 	updateView(): void {
 		this.el.toggleClass("is-settled", this.isSettled);
-		const cards = this.cards;
-		const total = cards.length;
-		if (total === 0) {
+		const totalTools = this.cards.length;
+		const totalThoughts = this.thinkings.length;
+
+		if (totalTools === 0 && totalThoughts === 0) {
 			this.headerEl.hide();
 			return;
 		}
 
-		const prevCount = total - 1;
+		this.headerEl.show();
+		const failedCount = this.cards.filter((c) => c.status === "error").length;
+		const runningCard = [...this.cards].reverse().find((c) => c.status === "running" || c.status === "pending");
+		const runningThinking = [...this.thinkings].reverse().find((t) => t.status === "running");
+		const intent = this.latestIntent();
+		const toolsSummary = formatToolsSummary(this.cards);
 
-		// 1. Left: Current activity
-		const active = this.activeCard;
-		if (active) {
-			this.currentEl.show();
-			const status = active.status;
-			this.currentEl.dataset.status = status;
-			if (status === "running") {
-				setIcon(this.currentIconEl, "loader");
-			} else if (status === "pending") {
-				setIcon(this.currentIconEl, "circle-dashed");
-			} else if (status === "error") {
-				setIcon(this.currentIconEl, "x");
+		if (!this.isSettled) {
+			this.el.dataset.status = "running";
+			setIcon(this.statusIconEl, "loader");
+
+			if (intent) {
+				this.titleEl.setText(intent);
+			} else if (runningCard) {
+				this.titleEl.setText(formatActivityText(runningCard.toolName, runningCard.arguments));
+			} else if (runningThinking) {
+				this.titleEl.setText("Thinking…");
+			} else if (totalTools > 0) {
+				const last = this.cards[totalTools - 1];
+				this.titleEl.setText(formatActivityText(last.toolName, last.arguments));
 			} else {
-				setIcon(this.currentIconEl, "check");
+				this.titleEl.setText("Working…");
 			}
-			this.currentTextEl.setText(formatCurrentActivity(active));
+
+			if (totalTools > 0) {
+				const stepWord = totalTools === 1 ? "1 step" : `${totalTools} steps`;
+				const failStr = failedCount > 0 ? ` (${failedCount} failed)` : "";
+				const activeLabel = runningCard ? runningCard.actionLabel : toolsSummary;
+				this.metaEl.setText(activeLabel ? `${stepWord}${failStr} · ${activeLabel}` : `${stepWord}${failStr}`);
+				this.metaEl.show();
+			} else {
+				this.metaEl.hide();
+			}
 		} else {
-			this.currentEl.hide();
+			if (failedCount > 0) {
+				this.el.dataset.status = "error";
+				setIcon(this.statusIconEl, "alert-circle");
+			} else {
+				this.el.dataset.status = "done";
+				setIcon(this.statusIconEl, "check");
+			}
+
+			if (totalTools > 0) {
+				const stepWord = totalTools === 1 ? "1 step" : `${totalTools} steps`;
+				const failStr = failedCount > 0 ? ` (${failedCount} failed)` : "";
+				if (intent) {
+					this.titleEl.setText(intent);
+					this.metaEl.setText(`${stepWord}${failStr} · ${toolsSummary}`);
+					this.metaEl.show();
+				} else {
+					this.titleEl.setText(`${stepWord}${failStr} · ${toolsSummary}`);
+					this.metaEl.hide();
+				}
+			} else {
+				this.titleEl.setText(intent || "Thought");
+				this.metaEl.hide();
+			}
 		}
 
-		// 2. Right: Previous calls expander
-		if (prevCount > 0) {
-			this.prevBtn.show();
-			const prevCards = cards.slice(0, prevCount);
-			const failedCount = prevCards.filter((c) => c.status === "error").length;
-			const failedText = failedCount > 0 ? ` (${failedCount} failed)` : "";
-			this.prevCountEl.setText(`${prevCount} previous${failedText}`);
-			const summary = formatPreviousSummary(prevCards);
-			this.prevBtn.setAttr("title", summary ? `${prevCount} previous calls: ${summary}` : "Click to toggle previous calls");
-		} else {
-			this.prevBtn.hide();
-		}
-
-		this.headerEl.toggle(Boolean(active) || prevCount > 0);
+		this.headerEl.setAttr(
+			"title",
+			toolsSummary ? `${this.titleEl.getText()} (${toolsSummary})` : this.titleEl.getText(),
+		);
 	}
 }

@@ -1201,17 +1201,19 @@ export class ChatSession {
 			case "thinking_start": {
 				this.setActivity("Thinking…");
 				if (this.plugin.settings.showThinking) {
-					const block = new ThinkingBlock(this.renderHost, live.el);
+					const group = this.ensureToolGroup(live.el);
+					const block = new ThinkingBlock(this.renderHost, group.cardContainer);
 					live.blocks.set(d.contentIndex, block);
-					if (this.currentToolGroup) {
-						this.currentToolGroup.attachThinking(block);
-					}
+					group.addThinking(block);
 				}
 				break;
 			}
 			case "thinking_delta": {
 				const block = live.blocks.get(d.contentIndex);
-				if (block instanceof ThinkingBlock) block.append(d.delta);
+				if (block instanceof ThinkingBlock) {
+					block.append(d.delta);
+					if (block.summaryLine) this.setActivity(block.summaryLine);
+				}
 				break;
 			}
 			case "thinking_end": {
@@ -1486,12 +1488,11 @@ export class ChatSession {
 				live.blocks.set(i, md);
 				md.set(block.text);
 			} else if (block.type === "thinking" && this.plugin.settings.showThinking) {
-				const thinking = (existing instanceof ThinkingBlock ? existing : undefined) ?? new ThinkingBlock(this.renderHost, live.el);
+				const group = this.ensureToolGroup(live.el);
+				const thinking = (existing instanceof ThinkingBlock ? existing : undefined) ?? new ThinkingBlock(this.renderHost, group.cardContainer);
 				live.blocks.set(i, thinking);
-				thinking.finish(block.thinking);
-				if (this.currentToolGroup) {
-					this.currentToolGroup.attachThinking(thinking);
-				}
+				thinking.finish(block.thinking, message.stopReason === "error");
+				group.addThinking(thinking);
 			} else if (block.type === "toolCall") {
 				const call = block as ToolCallContent;
 				live.blocks.set(i, this.cardFor(call.id, call.name, call.arguments, live.el));
