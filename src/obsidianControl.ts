@@ -4,7 +4,7 @@ import type { VaultSearch } from "./search/VaultSearch";
 // The Obsidian end of pi's obsidian_* tools (pi-extension/obsidian.ts): search, the metadata
 // cache, property edits, the command palette. Requests arrive as a dialog request with this title
 // and leave as its answer, so they never touch the network.
-export const OBSIDIAN_CHANNEL = "pi-harness:obsidian";
+export const OBSIDIAN_CHANNEL = "pi-workbench:obsidian";
 
 const MAX_NOTES = 200;
 const MAX_COMMANDS = 60;
@@ -187,12 +187,12 @@ export class ObsidianControl {
 			.filter((c) => commandAllowed(allowed, c.id))
 			.filter((c) => words.every((w) => c.id.toLowerCase().includes(w) || c.name.toLowerCase().includes(w)))
 			.sort((a, b) => a.name.localeCompare(b.name));
-		const note = allowed.trim() ? undefined : "The user hasn't allowed pi to run any Obsidian commands yet (Pi Harness settings → Commands pi may run).";
+		const note = allowed.trim() ? undefined : "The user hasn't allowed pi to run any Obsidian commands yet (Pi Workbench settings → Commands pi may run).";
 		return { commands: matching.slice(0, MAX_COMMANDS), total: matching.length, note };
 	}
 
 	private runCommand(id: string): Record<string, unknown> {
-		if (!commandAllowed(this.allowedCommands(), id)) throw new Error(`The user hasn't allowed pi to run ${id}. They can add it under Pi Harness settings → Commands pi may run.`);
+		if (!commandAllowed(this.allowedCommands(), id)) throw new Error(`The user hasn't allowed pi to run ${id}. They can add it under Pi Workbench settings → Commands pi may run.`);
 		const command = this.allCommands().find((c) => c.id === id);
 		if (!command) throw new Error(`No Obsidian command with id ${id}. Look it up with obsidian_commands.`);
 		const registry = (this.app as CommandsApp).commands;

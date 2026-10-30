@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Launcher for the official Obsidian CLI, bundled with the Pi Harness plugin.
+# Launcher for the official Obsidian CLI, bundled with the Pi Workbench plugin.
 # Obsidian 1.12.7+ installs the real binary inside the app bundle on macOS.
 APP_CLI="/Applications/Obsidian.app/Contents/MacOS/obsidian-cli"
 GLOBAL_CLI="/usr/local/bin/obsidian"

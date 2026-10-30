@@ -18,7 +18,7 @@ import { crc32, deflateSync } from "zlib";
 import { bundledFiles } from "./bundled-files.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const work = mkdtempSync(join(tmpdir(), "pi-harness-smoke-"));
+const work = mkdtempSync(join(tmpdir(), "pi-workbench-smoke-"));
 const entry = join(work, "entry.ts");
 writeFileSync(
 	entry,
@@ -498,7 +498,7 @@ const check = (ok, label, detail = "") => {
 	check(savedTabsFrom({ sessionFile: "/s/old.jsonl" })?.tabs[0].sessionFile === "/s/old.jsonl", "saved tabs: a single-session layout from before tabs still opens");
 	const layout = { main: { type: "split", children: [{ type: "leaf", id: "m1", state: { type: "markdown", state: { file: "a.md" } } }] }, right: { type: "split", children: [{ type: "tabs", children: [
 		{ type: "leaf", id: "old1", state: { type: "pi-agent-chat", state: { tabs: [{ sessionFile: "/s/a.jsonl", title: "A" }, { sessionFile: "/s/b.jsonl", title: "B" }], active: 1 }, icon: "pi" } },
-		{ type: "leaf", id: "new1", state: { type: "pi-harness-chat", state: { tabs: [{ sessionFile: "/s/b.jsonl", title: "B" }] } } },
+		{ type: "leaf", id: "new1", state: { type: "pi-workbench-chat", state: { tabs: [{ sessionFile: "/s/b.jsonl", title: "B" }] } } },
 		{ type: "leaf", id: "theirs", state: { type: "pi-agent-chat", state: { conversation: "someone else's plugin" } } },
 	] }] } };
 	const old = panelsIn(layout, "pi-agent-chat");

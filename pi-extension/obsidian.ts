@@ -1,6 +1,6 @@
 // Tools that give pi what only the running Obsidian app knows: ranked search kept current by the
 // app, the link graph and metadata cache, safe property edits, the command palette. Part of the
-// Pi Harness plugin, which loads this file with `pi -e` when "Let pi use Obsidian" is switched on.
+// Pi Workbench plugin, which loads this file with `pi -e` when "Let pi use Obsidian" is switched on.
 //
 // Like browser.ts, each call crosses from the pi process to Obsidian on the one channel an
 // extension and an RPC host already share: a dialog request with the title below, which the
@@ -8,7 +8,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-const CHANNEL = "pi-harness:obsidian";
+const CHANNEL = "pi-workbench:obsidian";
 
 interface SearchHit {
 	path: string;
@@ -40,9 +40,9 @@ interface Reply {
 }
 
 async function ask(ctx: ExtensionContext, request: Record<string, unknown>): Promise<Reply> {
-	if (!ctx.hasUI) throw new Error("The obsidian_* tools only work inside Obsidian's Pi Harness panel.");
+	if (!ctx.hasUI) throw new Error("The obsidian_* tools only work inside Obsidian's Pi Workbench panel.");
 	const answer = await ctx.ui.input(CHANNEL, JSON.stringify(request));
-	if (answer === undefined) throw new Error("Obsidian did not answer. Is the Pi Harness panel still open?");
+	if (answer === undefined) throw new Error("Obsidian did not answer. Is the Pi Workbench panel still open?");
 	const reply = JSON.parse(answer) as Reply;
 	if (reply.error) throw new Error(reply.error);
 	return reply;
@@ -173,7 +173,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "obsidian_run_command",
 		label: "Run Obsidian command",
-		description: "Run an Obsidian command by id, as if the user picked it from the command palette. It acts on what the user has open. The user decides which commands pi may run, under Pi Harness settings.",
+		description: "Run an Obsidian command by id, as if the user picked it from the command palette. It acts on what the user has open. The user decides which commands pi may run, under Pi Workbench settings.",
 		parameters: Type.Object({ id: Type.String({ description: "Command id from obsidian_commands, such as editor:toggle-source." }) }),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			return text(`Ran ${(await ask(ctx, { action: "run_command", id: params.id })).ran}.`);

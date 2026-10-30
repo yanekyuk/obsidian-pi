@@ -1,11 +1,11 @@
 // An A2A discussion: two agents argue opposite stances on a question, a referee checks whether
 // their arguments hold up. This file owns the discussion itself (who speaks when, what each
 // agent is told, how the transcript reads) and the shapes that cross between the pi extension
-// (index.ts) and the Pi Harness panel. It imports nothing from pi or Obsidian, so both sides
+// (index.ts) and the Pi Workbench panel. It imports nothing from pi or Obsidian, so both sides
 // and the tests can use it.
 
 // The extension asks the panel for a lineup on this dialog channel, like obsidian.ts does.
-export const A2A_CHANNEL = "pi-harness:a2a";
+export const A2A_CHANNEL = "pi-workbench:a2a";
 
 export const MIN_ROUNDS = 1;
 export const MAX_ROUNDS = 4;

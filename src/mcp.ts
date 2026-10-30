@@ -34,7 +34,7 @@ const INITIALIZE = JSON.stringify({
 	jsonrpc: "2.0",
 	id: 1,
 	method: "initialize",
-	params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "obsidian-pi-harness", version: "probe" } },
+	params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "obsidian-pi-workbench", version: "probe" } },
 });
 
 // Asks the server the first thing any MCP client asks. pi's adapter connects lazily, so its

@@ -23,7 +23,7 @@ interface PiEvent {
 }
 
 const TOOLS = "web_search,web_fetch";
-// How pi runs pi: the Pi Harness plugin names its binary (Settings → pi binary) in the environment.
+// How pi runs pi: the Pi Workbench plugin names its binary (Settings → pi binary) in the environment.
 const piBinary = () => process.env.PI_HARNESS_PI || "pi";
 
 export function speakWithPi(

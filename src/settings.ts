@@ -291,7 +291,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		const installed = await plugin.requirements.installed().catch((err: Error) => err);
 		if (installed instanceof Error) return void header.setDesc(`Couldn't run pi list: ${installed.message}`);
-		header.setDesc("Pi Harness only inspects installation status; it never installs, removes, or updates Pi packages. Manage packages yourself in a terminal. The switches below only control whether an installed package loads.");
+		header.setDesc("Pi Workbench only inspects installation status; it never installs, removes, or updates Pi packages. Manage packages yourself in a terminal. The switches below only control whether an installed package loads.");
 
 		const missingPackages = [...findRequired(installed)].filter(([, pkg]) => pkg === null).map(([name]) => name);
 		const skillsPackageMissing = !installed.some((pkg) => basename(pkg.path) === SKILLS_PACKAGE.name);
@@ -313,7 +313,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 				const source = sourceOf(entry);
 				const path = installed.find((pkg) => pkg.source === source)?.path;
 				const name = path ? basename(path) : source;
-				const description = [source, scope.label, required.has(name) ? "recommended by Pi Harness" : null, path ? null : "not installed; manage it in a terminal"].filter(Boolean).join(" · ");
+				const description = [source, scope.label, required.has(name) ? "recommended by Pi Workbench" : null, path ? null : "not installed; manage it in a terminal"].filter(Boolean).join(" · ");
 				new Setting(el)
 					.setName(name)
 					.setDesc(description)

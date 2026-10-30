@@ -9,7 +9,7 @@ import { savedTabsFrom, type SavedTab } from "./savedTabs";
 import { SessionsDrawer } from "./SessionsDrawer";
 import { TabSwitcher, renderStatus, summarize } from "./TabSwitcher";
 
-export const VIEW_TYPE_PI = "pi-harness-chat";
+export const VIEW_TYPE_PI = "pi-workbench-chat";
 
 // Electron's trash keeps deletion reversible. It is external to the bundle and has no types here.
 const { shell } = require("electron") as { shell: { trashItem(path: string): Promise<void> } };

@@ -74,7 +74,7 @@ export class SideQuestions {
 		const answer = new MarkdownBlock(this.render, answerEl);
 		this.render.onContentChanged();
 
-		const workDir = await fs.mkdtemp(join(tmpdir(), "pi-harness-btw-"));
+		const workDir = await fs.mkdtemp(join(tmpdir(), "pi-workbench-btw-"));
 		const cleanup = () => void fs.rm(workDir, { recursive: true, force: true });
 		if (id !== this.runId) return cleanup();
 

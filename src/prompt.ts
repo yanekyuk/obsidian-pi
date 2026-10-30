@@ -5,7 +5,7 @@ const CONTEXT_RE = new RegExp(`^<${CONTEXT_TAG}>\\n([\\s\\S]*?)\\n</${CONTEXT_TA
 const MAX_SELECTION_CHARS = 8000;
 
 export function buildSystemPrompt(vaultName: string, userAddendum: string): string {
-	const base = `You are running inside Obsidian as the "Pi Harness" plugin. The working directory is the root of the user's vault "${vaultName}". Notes are Markdown files; the user sees your replies rendered as Obsidian Markdown in a side panel.
+	const base = `You are running inside Obsidian as the "Pi Workbench" plugin. The working directory is the root of the user's vault "${vaultName}". Notes are Markdown files; the user sees your replies rendered as Obsidian Markdown in a side panel.
 
 - When you refer to a note, write it as a wikilink such as [[Folder/Note name]] so the user can click it. Wikilinks in the user's messages refer to vault files: [[Folder/Note]] is Folder/Note.md.
 - Write notes in Obsidian Flavored Markdown (wikilinks, embeds, callouts, properties). Load the obsidian-markdown skill before creating or restructuring notes, obsidian-bases for .base files, json-canvas for .canvas files, obsidian-cli to drive the running Obsidian app, and defuddle to read web pages.

@@ -1,4 +1,4 @@
-// Tools that let pi drive Obsidian's built-in web viewer. Part of the Pi Harness plugin, which
+// Tools that let pi drive Obsidian's built-in web viewer. Part of the Pi Workbench plugin, which
 // loads this file with `pi -e` when "Let pi use the web viewer" is switched on.
 //
 // pi runs as a child process and the web viewer lives inside Obsidian, so each tool call has to
@@ -9,14 +9,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-const CHANNEL = "pi-harness:browser";
+const CHANNEL = "pi-workbench:browser";
 
 type Reply = { error?: string; url?: string; title?: string; text?: string; truncated?: boolean; links?: { text: string; href: string }[]; data?: string; mimeType?: string; value?: string };
 
 async function ask(ctx: ExtensionContext, request: Record<string, unknown>): Promise<Reply> {
-	if (!ctx.hasUI) throw new Error("The web viewer tools only work inside Obsidian's Pi Harness panel.");
+	if (!ctx.hasUI) throw new Error("The web viewer tools only work inside Obsidian's Pi Workbench panel.");
 	const answer = await ctx.ui.input(CHANNEL, JSON.stringify(request));
-	if (answer === undefined) throw new Error("Obsidian did not answer. Is the Pi Harness panel still open?");
+	if (answer === undefined) throw new Error("Obsidian did not answer. Is the Pi Workbench panel still open?");
 	const reply = JSON.parse(answer) as Reply;
 	if (reply.error) throw new Error(reply.error);
 	return reply;

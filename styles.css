@@ -219,88 +219,18 @@
 
 .pi-tool-group-header {
 	display: flex;
-	flex-direction: column;
-	gap: var(--size-2-3);
-}
-
-.pi-tool-group-prev {
-	display: inline-flex;
 	align-items: center;
-	gap: var(--size-2-2);
-	align-self: flex-start;
-	max-width: 100%;
-	padding: var(--size-2-2) var(--size-4-2);
-	border-radius: var(--radius-m);
-	border: 1px solid var(--background-modifier-border);
-	background: var(--background-secondary);
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-	font-family: var(--font-interface);
-	line-height: var(--line-height-tight);
-	cursor: pointer;
-	text-align: left;
-	transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
-}
-
-.pi-tool-group-prev:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
-	border-color: var(--background-modifier-border-focus);
-}
-
-.pi-tool-group-chevron {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	flex: none;
-	transition: transform 140ms ease;
-	color: var(--text-faint);
-}
-
-.pi-tool-group-chevron .svg-icon {
-	width: var(--icon-xs);
-	height: var(--icon-xs);
-}
-
-.pi-tool-group-prev.is-open .pi-tool-group-chevron {
-	transform: rotate(90deg);
-}
-
-.pi-tool-group-prev-title {
-	font-weight: var(--font-medium);
-	color: var(--text-muted);
-	flex: none;
-}
-
-.pi-tool-group-prev-count {
-	font-weight: var(--font-semibold);
-	color: var(--text-normal);
-	flex: none;
-}
-
-.pi-tool-group-prev-sep {
-	color: var(--text-faint);
-	flex: none;
-}
-
-.pi-tool-group-prev-summary {
-	color: var(--text-faint);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	font-family: var(--font-monospace);
-	font-size: var(--font-ui-smaller);
-}
-
-.pi-tool-group-prev:hover .pi-tool-group-prev-summary {
-	color: var(--text-muted);
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	min-height: var(--size-4-4);
 }
 
 .pi-tool-group-current {
 	display: flex;
 	align-items: center;
 	gap: var(--size-2-2);
-	padding: var(--size-1-2) var(--size-2-1);
+	min-width: 0;
+	flex: 1 1 auto;
 	font-size: var(--font-ui-smaller);
 	line-height: var(--line-height-normal);
 	color: var(--text-muted);
@@ -338,6 +268,57 @@
 	white-space: nowrap;
 	font-family: var(--font-monospace);
 	font-size: var(--font-ui-smaller);
+}
+
+.pi-tool-group-prev {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-1);
+	flex: 0 0 auto;
+	padding: var(--size-1-2) var(--size-2-3);
+	border-radius: var(--radius-m);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-family: var(--font-interface);
+	line-height: var(--line-height-tight);
+	cursor: pointer;
+	white-space: nowrap;
+	transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.pi-tool-group-prev:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+	border-color: var(--background-modifier-border-focus);
+}
+
+.pi-tool-group-prev-count {
+	font-weight: var(--font-medium);
+	color: var(--text-muted);
+}
+
+.pi-tool-group-prev:hover .pi-tool-group-prev-count {
+	color: var(--text-normal);
+}
+
+.pi-tool-group-chevron {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	color: var(--text-faint);
+}
+
+.pi-tool-group-chevron .svg-icon {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+	transition: transform 140ms ease;
+}
+
+.pi-tool-group-prev.is-open .pi-tool-group-chevron .svg-icon {
+	transform: rotate(180deg);
 }
 
 .pi-tool-group-previous {

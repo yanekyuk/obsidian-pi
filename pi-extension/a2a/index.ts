@@ -1,6 +1,6 @@
 // A2A discussions: two agents from different providers argue opposite stances on a question
 // while a referee checks whether their arguments hold up; all three can search the web. Part of
-// the Pi Harness plugin, which loads this with `pi -e` when "Let pi hold A2A discussions" is on.
+// the Pi Workbench plugin, which loads this with `pi -e` when "Let pi hold A2A discussions" is on.
 //
 // pi proposes a discussion by calling a2a_discussion (or the user asks for one with /a2a). The
 // panel shows the proposal with an automatically chosen model per role, which the user can
@@ -68,7 +68,7 @@ export default function (pi: ExtensionAPI) {
 
 // The panel answers with the lineup the user started, nothing when they declined, or `{ error }`.
 async function askForLineup(ctx: ExtensionContext, proposal: Proposal, signal?: AbortSignal): Promise<DiscussionPlan | null> {
-	if (!ctx.hasUI) throw new Error("An A2A discussion needs the Pi Harness panel, where the user chooses the models.");
+	if (!ctx.hasUI) throw new Error("An A2A discussion needs the Pi Workbench panel, where the user chooses the models.");
 	const answer = await ctx.ui.input(A2A_CHANNEL, JSON.stringify(proposal), { signal });
 	if (answer === undefined) return null;
 	const reply = JSON.parse(answer) as DiscussionPlan & { error?: string };

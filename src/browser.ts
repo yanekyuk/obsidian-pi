@@ -3,7 +3,7 @@ import type { App, WorkspaceLeaf } from "obsidian";
 // The Obsidian end of pi's browser_* tools (pi-extension/browser.ts): it drives the web viewer,
 // Obsidian's core plugin for opening pages inside the app. Requests arrive as a dialog request
 // with this title and leave as its answer, so they never touch the network.
-export const BROWSER_CHANNEL = "pi-harness:browser";
+export const BROWSER_CHANNEL = "pi-workbench:browser";
 
 const WEB_VIEWER = "webviewer";
 const LOAD_TIMEOUT_MS = 20_000;

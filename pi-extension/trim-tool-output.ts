@@ -1,6 +1,6 @@
 // Keeps long conversations light: before each model call, the bulky output of tool calls from
 // earlier turns (whole notes pi read, fetched pages, screenshots) is replaced by one line saying
-// what it was, so pi can run the tool again if it still needs it. Part of the Pi Harness plugin,
+// what it was, so pi can run the tool again if it still needs it. Part of the Pi Workbench plugin,
 // which loads this file with `pi -e` when "Trim old tool output" is switched on.
 //
 // Only what goes to the model for that request changes. The session file, the panel and

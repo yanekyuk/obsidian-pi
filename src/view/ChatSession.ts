@@ -16,7 +16,7 @@ import { PiRpcClient } from "../rpc/PiRpcClient";
 import type { AgentMessage, AssistantMessageEvent, ExtensionUiRequest, ImageContent, RpcEvent, SessionState, SlashCommand, ToolCallContent, UserMessage } from "../rpc/types";
 import { contentText } from "../sessions";
 import { AttachmentTray, imageFilesOf, imageSrc } from "./Attachments";
-import { MarkdownBlock, ThinkingBlock, ToolCard, ToolGroup, rerenderMarkdownIn, type RenderHost } from "./blocks";
+import { MarkdownBlock, ThinkingBlock, ToolCard, ToolGroup, formatActivityText, rerenderMarkdownIn, type RenderHost } from "./blocks";
 import { ComposerSuggest } from "./ComposerSuggest";
 import { InlineDialogs, type DialogForm } from "./InlineDialogs";
 import { readEnabledModels, scopeModels } from "../models";
@@ -528,14 +528,14 @@ export class ChatSession {
 		if (skillsMissing) {
 			card.createDiv({
 				text: skillsPackageInstalled
-					? "The Obsidian skills package is installed but its skills are not loaded. Enable the package in Pi Harness settings, or check its Pi filters."
+					? "The Obsidian skills package is installed but its skills are not loaded. Enable the package in Pi Workbench settings, or check its Pi filters."
 					: "Obsidian skills for notes, Bases, and Canvas are not loaded.",
 			});
 		}
 
 		const commands = manualInstallCommands(missingPackages, skillsMissing && !skillsPackageInstalled);
 		if (commands.length) {
-			card.createDiv({ text: "Pi Harness never installs or updates packages. Open a terminal in this vault's root and run:" });
+			card.createDiv({ text: "Pi Workbench never installs or updates packages. Open a terminal in this vault's root and run:" });
 			card.createEl("pre", { cls: "pi-prerequisite-commands", text: commands.join("\n") });
 		}
 		const actions = card.createDiv({ cls: "pi-dialog-actions" });
@@ -599,7 +599,7 @@ export class ChatSession {
 			this.failed = true;
 			this.showBanner(
 				missing ? `Couldn't find "${this.plugin.settings.piPath}"` : "pi failed to start",
-				missing ? "Install pi, or set its full path in Settings → Pi Harness." : String((err as Error).message ?? err),
+				missing ? "Install pi, or set its full path in Settings → Pi Workbench." : String((err as Error).message ?? err),
 				{ label: "Retry", run: () => void this.restart() },
 			);
 		} finally {
@@ -1112,13 +1112,14 @@ export class ChatSession {
 						(e.message as AssistantMessage).content.some((b) => b.type === "toolCall");
 					if (!isToolTurn) {
 						this.settleToolGroup();
+						this.setActivity(null);
 					}
 					this.live = null;
 				}
 				break;
 			case "tool_execution_start":
 				this.cardFor(e.toolCallId, e.toolName, e.args).setStatus("running");
-				this.setActivity(`Running ${e.toolName}…`);
+				this.setActivity(formatActivityText(e.toolName, e.args));
 				if (EDITING_TOOLS.has(e.toolName) && typeof e.args?.path === "string") {
 					const snapshot = snapshotBefore(this.absolutePath(e.args.path));
 					if (snapshot) this.snapshots.set(e.toolCallId, snapshot);
@@ -1134,7 +1135,7 @@ export class ChatSession {
 				card.setResult(e.result, e.isError);
 				card.setStatus(e.isError ? "error" : "done");
 				this.offerRevert(e.toolCallId, e.toolName, e.isError);
-				this.setActivity("Working…");
+				this.setActivity(`Processing ${e.toolName} result…`);
 				this.keepScrolled();
 				break;
 			}
@@ -1169,7 +1170,7 @@ export class ChatSession {
 				if (!e.success) this.renderNotice(e.finalError ?? "Retries exhausted", true);
 				break;
 			case "extension_error":
-				console.warn(`[pi-harness] extension error in ${e.extensionPath} (${e.event}): ${e.error}`);
+				console.warn(`[pi-workbench] extension error in ${e.extensionPath} (${e.event}): ${e.error}`);
 				break;
 			case "extension_ui_request":
 				this.onExtensionUi(e);
@@ -1186,6 +1187,7 @@ export class ChatSession {
 				break;
 			case "text_delta": {
 				if (!d.delta) break;
+				this.setActivity("Writing response…");
 				const existing = live.blocks.get(d.contentIndex);
 				let md = existing instanceof MarkdownBlock ? existing : undefined;
 				if (!md) {
@@ -1197,6 +1199,7 @@ export class ChatSession {
 				break;
 			}
 			case "thinking_start": {
+				this.setActivity("Thinking…");
 				if (this.plugin.settings.showThinking) {
 					const block = new ThinkingBlock(this.renderHost, live.el);
 					live.blocks.set(d.contentIndex, block);

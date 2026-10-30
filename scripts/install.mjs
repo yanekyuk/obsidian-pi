@@ -2,7 +2,7 @@
 // Without a path it uses the vault Obsidian currently has open.
 //
 //   npm run install:test [-- /path/to/vault]
-// installs the build as a second plugin, "Pi Harness (test)" (id pi-harness-test), to try a change
+// installs the build as a second plugin, "Pi Workbench (test)" (id pi-workbench-test), to try a change
 // before it is released. Its panel's view type and its obsidian:// address get names of their own,
 // so it can run next to the released plugin. On the first install it copies the released plugin's
 // settings, but not its last session: two pi processes on one session file would corrupt it.
@@ -29,8 +29,8 @@ function openVault() {
 
 // The names in main.js that two copies of the plugin can't share, each expected exactly once.
 const TEST_RENAMES = [
-	['"pi-harness-chat"', '"pi-harness-test-chat"'], // the panel's view type
-	['"pi-harness"', '"pi-harness-test"'], // obsidian://pi-harness
+	['"pi-workbench-chat"', '"pi-workbench-test-chat"'], // the panel's view type
+	['"pi-workbench"', '"pi-workbench-test"'], // obsidian://pi-workbench
 ];
 
 function testBuild(mainJs) {
@@ -54,6 +54,8 @@ if (!existsSync(join(root, "main.js"))) {
 
 const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
 const released = manifest.id;
+// Versions up to 0.1.27 used the id "pi-harness", which a different community plugin also uses.
+const legacyId = "pi-harness";
 // The test copy's version names the build it carries, such as 0.1.16-test.20260923.1506, so
 // Settings → Community plugins shows which build is installed.
 const builtAt = statSync(join(root, "main.js")).mtime;
@@ -74,11 +76,27 @@ for (const dir of ["bin", "pi-extension"]) {
 	cpSync(join(root, dir), join(dest, dir), { recursive: true });
 }
 
-const releasedData = join(pluginsDir, released, "data.json");
-if (testCopy && !existsSync(join(dest, "data.json")) && existsSync(releasedData)) {
+// Settings of an older install of this plugin. The legacy folder can hold the other plugin, so check the author.
+function legacyData() {
+	try {
+		const old = join(pluginsDir, legacyId);
+		if (JSON.parse(readFileSync(join(old, "manifest.json"), "utf8")).author !== manifest.author) return null;
+		return join(old, "data.json");
+	} catch {
+		return null;
+	}
+}
+const ownData = join(pluginsDir, released, "data.json");
+const releasedData = existsSync(ownData) ? ownData : legacyData();
+if (testCopy && !existsSync(join(dest, "data.json")) && releasedData && existsSync(releasedData)) {
 	const settings = JSON.parse(readFileSync(releasedData, "utf8"));
 	writeFileSync(join(dest, "data.json"), JSON.stringify({ ...settings, lastSessionFile: "", hiddenTodos: {} }, null, "\t"));
 	console.log(`Copied the settings of ${released}, without its last session.`);
+}
+
+if (!testCopy && !existsSync(join(dest, "data.json")) && releasedData && existsSync(releasedData) && releasedData !== join(dest, "data.json")) {
+	cpSync(releasedData, join(dest, "data.json"));
+	console.log(`Copied the settings of ${legacyId}.`);
 }
 
 console.log(`Installed ${manifest.id} ${manifest.version} to ${dest}`);

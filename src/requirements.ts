@@ -2,7 +2,7 @@ import { execFile } from "child_process";
 import { basename } from "path";
 
 // The pi packages the panel knows how to present. A local checkout or git fork with the
-// same folder name satisfies a requirement; Pi Harness only inspects packages and never
+// same folder name satisfies a requirement; Pi Workbench only inspects packages and never
 // installs, removes, or updates them.
 export const MCP_ADAPTER = "pi-mcp-adapter";
 export const REQUIRED_PACKAGES = ["rpiv-advisor", "rpiv-args", "rpiv-ask-user-question", "rpiv-btw", "rpiv-todo", "rpiv-web-tools"] as const;
@@ -16,7 +16,7 @@ export const requiredPackageSource = (name: RequiredPackageName): string => `npm
 export const SKILLS_PACKAGE = { name: "obsidian-skills", source: "git:github.com/kepano/obsidian-skills" } as const;
 export const OBSIDIAN_SKILLS = ["obsidian-markdown", "obsidian-bases", "json-canvas", "obsidian-cli", "defuddle"];
 
-// Local installs work with Pi Harness's isolated profile and its shared profile alike.
+// Local installs work with Pi Workbench's isolated profile and its shared profile alike.
 // These commands must be run by the user in a terminal whose working directory is the vault.
 export function manualInstallCommands(missingPackages: readonly RequiredPackageName[], includeObsidianSkills: boolean): string[] {
 	const sources = missingPackages.map(requiredPackageSource);

@@ -198,6 +198,27 @@ function formatPreviousSummary(cards: ToolCard[]): string {
 	return parts.join(", ");
 }
 
+export function formatActivityText(toolName: string, args?: Record<string, unknown>): string {
+	if (!args || !Object.keys(args).length) return `Running ${toolName}…`;
+	const { text, path } = summarize(toolName, args);
+	const short = (s: string, max = 50) => (s.length > max ? s.slice(0, max - 1) + "…" : s);
+	switch (toolName) {
+		case "bash":
+			return text ? `Running: ${short(text)}` : "Running command…";
+		case "read":
+			return path ? `Reading ${short(path)}…` : "Reading file…";
+		case "edit":
+			return path ? `Editing ${short(path)}…` : "Editing file…";
+		case "write":
+			return path ? `Writing ${short(path)}…` : "Writing file…";
+		case "grep":
+		case "find":
+			return text ? `Searching: ${short(text)}` : "Searching…";
+		default:
+			return text ? `${toolName}: ${short(text)}` : `Running ${toolName}…`;
+	}
+}
+
 function formatCurrentActivity(active: ToolCard): string {
 	const name = active.toolName;
 	const summary = active.summaryLine;
@@ -337,7 +358,7 @@ export class ToolCard {
 		try {
 			return render();
 		} catch (err) {
-			console.warn(`[pi-harness] couldn't render the ${this.name} card; showing it plain`, err);
+			console.warn(`[pi-workbench] couldn't render the ${this.name} card; showing it plain`, err);
 			return null;
 		}
 	}
@@ -457,7 +478,6 @@ export class ToolGroup {
 	private prevBtn: HTMLButtonElement;
 	private prevChevronEl: HTMLElement;
 	private prevCountEl: HTMLElement;
-	private prevSummaryEl: HTMLElement;
 
 	private currentEl: HTMLElement;
 	private currentIconEl: HTMLElement;
@@ -479,26 +499,23 @@ export class ToolGroup {
 
 		this.headerEl = this.el.createDiv({ cls: "pi-tool-group-header" });
 
-		// Previous calls expander button
+		// Left: Current activity
+		this.currentEl = this.headerEl.createDiv({ cls: "pi-tool-group-current" });
+		this.currentIconEl = this.currentEl.createSpan({ cls: "pi-tool-group-current-icon pi-icon" });
+		this.currentTextEl = this.currentEl.createSpan({ cls: "pi-tool-group-current-text" });
+
+		// Right: Previous calls expander button
 		this.prevBtn = this.headerEl.createEl("button", {
 			cls: "pi-tool-group-prev clickable",
 			attr: { "aria-expanded": "false" },
 		});
-		this.prevChevronEl = this.prevBtn.createSpan({ cls: "pi-tool-group-chevron pi-icon" });
-		setIcon(this.prevChevronEl, "chevron-right");
-		this.prevBtn.createSpan({ cls: "pi-tool-group-prev-title", text: "Previously:" });
 		this.prevCountEl = this.prevBtn.createSpan({ cls: "pi-tool-group-prev-count" });
-		this.prevBtn.createSpan({ cls: "pi-tool-group-prev-sep", text: "·" });
-		this.prevSummaryEl = this.prevBtn.createSpan({ cls: "pi-tool-group-prev-summary" });
+		this.prevChevronEl = this.prevBtn.createSpan({ cls: "pi-tool-group-chevron pi-icon" });
+		setIcon(this.prevChevronEl, "chevron-down");
 		this.prevBtn.addEventListener("click", (evt) => {
 			evt.preventDefault();
 			this.toggleExpanded();
 		});
-
-		// Current activity row
-		this.currentEl = this.headerEl.createDiv({ cls: "pi-tool-group-current" });
-		this.currentIconEl = this.currentEl.createSpan({ cls: "pi-tool-group-current-icon pi-icon" });
-		this.currentTextEl = this.currentEl.createSpan({ cls: "pi-tool-group-current-text" });
 
 		// Containers
 		this.previousContainer = this.el.createDiv({ cls: "pi-tool-group-previous is-collapsed" });
@@ -577,6 +594,7 @@ export class ToolGroup {
 	}
 
 	updateView(): void {
+		this.el.toggleClass("is-settled", this.isSettled);
 		const cards = this.cards;
 		const total = cards.length;
 		if (total === 0) {
@@ -584,42 +602,11 @@ export class ToolGroup {
 			return;
 		}
 
-		this.headerEl.show();
 		const prevCount = total - 1;
 
-		// 1. Previous calls expander
-		if (prevCount > 0) {
-			this.prevBtn.show();
-			const prevCards = cards.slice(0, prevCount);
-			const failedCount = prevCards.filter((c) => c.status === "error").length;
-			const failedText = failedCount > 0 ? ` (${failedCount} failed)` : "";
-			this.prevCountEl.setText(`${prevCount} ${prevCount === 1 ? "call" : "calls"}${failedText}`);
-			const summary = formatPreviousSummary(prevCards);
-			this.prevSummaryEl.setText(summary);
-			this.prevBtn.setAttr("title", `Click to ${this.isExpanded ? "collapse" : "expand"} previous calls`);
-		} else {
-			this.prevBtn.hide();
-		}
-
-		// 2. What it is doing currently
+		// 1. Left: Current activity
 		const active = this.activeCard;
-		if (this.isSettled) {
-			if (total > 1) {
-				this.currentEl.show();
-				const errorCount = cards.filter((c) => c.status === "error").length;
-				if (errorCount > 0) {
-					setIcon(this.currentIconEl, "alert-circle");
-					this.currentEl.dataset.status = "error";
-					this.currentTextEl.setText(`Completed ${total} tool calls (${errorCount} failed)`);
-				} else {
-					setIcon(this.currentIconEl, "check");
-					this.currentEl.dataset.status = "done";
-					this.currentTextEl.setText(`Completed ${total} tool calls`);
-				}
-			} else {
-				this.currentEl.hide();
-			}
-		} else if (active) {
+		if (active) {
 			this.currentEl.show();
 			const status = active.status;
 			this.currentEl.dataset.status = status;
@@ -636,5 +623,20 @@ export class ToolGroup {
 		} else {
 			this.currentEl.hide();
 		}
+
+		// 2. Right: Previous calls expander
+		if (prevCount > 0) {
+			this.prevBtn.show();
+			const prevCards = cards.slice(0, prevCount);
+			const failedCount = prevCards.filter((c) => c.status === "error").length;
+			const failedText = failedCount > 0 ? ` (${failedCount} failed)` : "";
+			this.prevCountEl.setText(`${prevCount} previous${failedText}`);
+			const summary = formatPreviousSummary(prevCards);
+			this.prevBtn.setAttr("title", summary ? `${prevCount} previous calls: ${summary}` : "Click to toggle previous calls");
+		} else {
+			this.prevBtn.hide();
+		}
+
+		this.headerEl.toggle(Boolean(active) || prevCount > 0);
 	}
 }

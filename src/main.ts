@@ -21,7 +21,11 @@ import { ChatView, VIEW_TYPE_PI } from "./view/ChatView";
 import { panelsIn, type SavedTab } from "./view/savedTabs";
 
 const MAX_SESSIONS_WITH_HIDDEN_TODOS = 30;
-const LEGACY_VIEW_TYPE = "pi-agent-chat";
+// Panels saved under the names this plugin had before, with the id of the plugin that may own each name now.
+const LEGACY_PANELS = [
+	{ viewType: "pi-agent-chat", plugin: "pi-agent" }, // before it was published
+	{ viewType: "pi-harness-chat", plugin: "pi-harness" }, // up to 0.1.27, before the id changed
+];
 const PI_ICON = `<path d="M18 30h64M38 30v46M64 30v34c0 8 4 12 12 12" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`;
 
 export default class PiAgentPlugin extends Plugin {
@@ -35,7 +39,7 @@ export default class PiAgentPlugin extends Plugin {
 
 	get vaultPath(): string {
 		const adapter = this.app.vault.adapter;
-		if (!(adapter instanceof FileSystemAdapter)) throw new Error("Pi Harness needs a vault on the local file system.");
+		if (!(adapter instanceof FileSystemAdapter)) throw new Error("Pi Workbench needs a vault on the local file system.");
 		return adapter.getBasePath();
 	}
 
@@ -46,19 +50,19 @@ export default class PiAgentPlugin extends Plugin {
 		addIcon("pi", PI_ICON);
 		void resolveEnv(); // warm the shell PATH lookup before the first spawn
 		// Before any chat starts pi, whose PATH includes the launcher.
-		if (this.manifest.dir) await extractBundledFiles(join(this.vaultPath, this.manifest.dir)).catch((err) => console.warn("[pi-harness] couldn't write the bundled launcher", err));
+		if (this.manifest.dir) await extractBundledFiles(join(this.vaultPath, this.manifest.dir)).catch((err) => console.warn("[pi-workbench] couldn't write the bundled launcher", err));
 
 		this.addChild(this.vaultSearch);
 		this.registerView(VIEW_TYPE_PI, (leaf) => new ChatView(leaf, this));
 		this.app.workspace.onLayoutReady(() => void this.adoptLegacyPanels());
-		this.registerHoverLinkSource(VIEW_TYPE_PI, { display: "Pi Harness", defaultMod: true });
+		this.registerHoverLinkSource(VIEW_TYPE_PI, { display: "Pi Workbench", defaultMod: true });
 		this.addSettingTab(new PiAgentSettingTab(this.app, this));
 		this.addRibbonIcon("pi", "Open pi", () => void this.activateView());
 		this.statusBar = new StatusBar(this, () => this.chatViews(), (tab) => void this.chatViews().find((view) => view.allTabs().includes(tab))?.revealTab(tab));
 
-		// obsidian://pi-harness?prompt=…  puts the words in the composer of a new tab; &send=1 sends
+		// obsidian://pi-workbench?prompt=…  puts the words in the composer of a new tab; &send=1 sends
 		// them; &note=Folder/Note opens pi for that note; &session=<file name> opens that session.
-		this.registerObsidianProtocolHandler("pi-harness", (params) => void this.handleUri(params));
+		this.registerObsidianProtocolHandler("pi-workbench", (params) => void this.handleUri(params));
 
 		this.addCommand({
 			id: "advisor",
@@ -159,20 +163,21 @@ export default class PiAgentPlugin extends Plugin {
 		return { binary: this.settings.piPath, env: await this.piEnv(), cwd: this.vaultPath };
 	}
 
-	// Before it was published the plugin was called Pi Agent, and its panels are still in the
-	// workspace layout under that name's view type, as dead panes holding their open tabs. Their
-	// tabs move to a live panel and the dead pane is closed.
+	// The plugin was called Pi Agent before it was published, and its id was pi-harness up to
+	// 0.1.27. Its panels are still in the workspace layout under those view types, as dead panes
+	// holding their open tabs. Their tabs move to a live panel and the dead pane is closed.
 	//
 	// The layout file is read from disk: what a pane whose plugin is gone reports about itself at
 	// run time is Obsidian's business and has proved unreliable, while the file says plainly what
-	// was saved. Another plugin now owns the old name, so a pane is only touched while that plugin
-	// isn't running and the state in it is plainly ours. Each pane is adopted once, so a tab the
+	// was saved. Another plugin may now own an old name, so a pane is only touched while that
+	// plugin isn't running and the state in it is plainly ours. Each pane is adopted once, so a tab the
 	// user closes afterwards stays closed even if the dead pane could not be removed.
 	private async adoptLegacyPanels(): Promise<void> {
-		if (this.isPluginRunning("pi-agent")) return;
+		const names = LEGACY_PANELS.filter((legacy) => !this.isPluginRunning(legacy.plugin));
+		if (names.length === 0) return;
 		try {
 			const layout: unknown = JSON.parse(await this.app.vault.adapter.read(`${this.app.vault.configDir}/workspace.json`));
-			const found = panelsIn(layout, LEGACY_VIEW_TYPE);
+			const found = names.flatMap((legacy) => panelsIn(layout, legacy.viewType));
 
 			for (const { id, tabs } of found) {
 				if (!this.settings.adoptedLegacyPanels.includes(id)) {
@@ -181,12 +186,12 @@ export default class PiAgentPlugin extends Plugin {
 					const live = this.chatViews()[0];
 					if (live) live.adoptTabs(tabs);
 					else this.pendingTabs.push(...tabs); // for the first panel that opens
-					console.debug(`[pi-harness] adopted ${tabs.length} tabs from the old panel ${id}${live ? "" : " (waiting for a panel)"}`);
+					console.debug(`[pi-workbench] adopted ${tabs.length} tabs from the old panel ${id}${live ? "" : " (waiting for a panel)"}`);
 				}
 				this.app.workspace.getLeafById(id)?.detach();
 			}
 		} catch (err) {
-			console.warn("[pi-harness] couldn't look for panels from before the rename", err);
+			console.warn("[pi-workbench] couldn't look for panels from before the rename", err);
 		}
 	}
 
