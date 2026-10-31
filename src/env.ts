@@ -1,5 +1,5 @@
 import { execFile } from "child_process";
-import { homedir } from "os";
+import { homedir, userInfo } from "os";
 import { delimiter, join } from "path";
 
 // GUI apps on macOS/Linux don't inherit the login shell's PATH, so `pi` (a
@@ -11,7 +11,9 @@ const MARK = "__PI_HARNESS_PATH__";
 const FALLBACK_DIRS = [
 	"/opt/homebrew/bin",
 	"/usr/local/bin",
+	join(homedir(), ".pi", "agent", "bin"),
 	join(homedir(), ".local", "bin"),
+	join(homedir(), ".local", "share", "pi-node", "current", "bin"),
 	join(homedir(), ".bun", "bin"),
 	join(homedir(), ".npm-global", "bin"),
 	join(homedir(), ".volta", "bin"),
@@ -19,9 +21,20 @@ const FALLBACK_DIRS = [
 
 let cached: Promise<NodeJS.ProcessEnv> | null = null;
 
+function loginShell(): string {
+	if (process.env.SHELL) return process.env.SHELL;
+	try {
+		const shell = userInfo().shell;
+		if (shell) return shell;
+	} catch {
+		// Fall through to platform default.
+	}
+	return process.platform === "darwin" ? "/bin/zsh" : "/bin/bash";
+}
+
 function shellPath(): Promise<string | null> {
 	if (process.platform === "win32") return Promise.resolve(null);
-	const shell = process.env.SHELL || "/bin/zsh";
+	const shell = loginShell();
 	return new Promise((resolve) => {
 		execFile(
 			shell,

@@ -81,7 +81,7 @@ export class PiRpcClient {
 					reject(err);
 				}
 			});
-			proc.once("exit", (code) => this.handleExit(proc, code));
+			proc.once("close", (code) => this.handleExit(proc, code));
 
 			this.attachJsonlReader(proc);
 			proc.stderr.on("data", (chunk: Buffer) => {
@@ -98,7 +98,7 @@ export class PiRpcClient {
 		this.stopping = true;
 		await new Promise<void>((resolve) => {
 			const force = setTimeout(() => proc.kill("SIGKILL"), 2000);
-			proc.once("exit", () => {
+			proc.once("close", () => {
 				clearTimeout(force);
 				resolve();
 			});
@@ -145,13 +145,15 @@ export class PiRpcClient {
 	private handleExit(proc: ChildProcessWithoutNullStreams, code: number | null): void {
 		if (this.proc !== proc && this.proc !== null) return;
 		this.proc = null;
-		const err = new Error("pi process exited");
+		const stderr = this.stderrTail.trim();
+		const tail = stderr.split("\n").slice(-12).join("\n");
+		const err = new Error(tail || (code === null ? "pi process exited" : `pi exited with code ${code}`));
 		for (const pending of this.pending.values()) {
 			if (pending.timer) clearTimeout(pending.timer);
 			pending.reject(err);
 		}
 		this.pending.clear();
-		const info = { code, stderr: this.stderrTail.trim(), expected: this.stopping };
+		const info = { code, stderr, expected: this.stopping };
 		for (const fn of this.exitListeners) fn(info);
 	}
 

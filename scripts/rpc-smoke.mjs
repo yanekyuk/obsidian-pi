@@ -661,6 +661,20 @@ client.onEvent((e) => events.push(e));
 let exitInfo = null;
 client.onExit((info) => (exitInfo = info));
 
+// A pi that exits during startup (e.g. a broken extension) must surface stderr on the
+// rejected startup request rather than swallowing it behind a bare "pi process exited".
+{
+	const broken = new PiRpcClient();
+	await broken.start({
+		binary: "pi",
+		args: ["--no-session", "--no-skills", "-e", join(work, "missing-extension.ts")],
+		cwd: work,
+		env,
+	});
+	const startupErr = await broken.getState().then(() => null, (err) => err);
+	check(Boolean(startupErr?.message?.includes("missing-extension.ts")), "startup failure surfaces pi's stderr instead of a bare exit error", startupErr?.message?.split("\n")[0]);
+}
+
 // cwd is a scratch dir, not a vault: nothing personal gets loaded. The Obsidian skills come
 // from their author's repository the way the plugin installs them, except that `-e` fetches
 // the package for this run only and leaves this machine's pi settings alone.

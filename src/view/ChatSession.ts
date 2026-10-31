@@ -617,7 +617,7 @@ export class ChatSession {
 		this.dialogs.drop();
 		this.settleToolGroup();
 		this.live = null;
-		if (info.expected) return;
+		if (info.expected || this.connecting) return;
 		this.showBanner(`pi exited${info.code === null ? "" : ` with code ${info.code}`}`, info.stderr.split("\n").slice(-12).join("\n"), {
 			label: "Restart",
 			run: () => void this.restart(),
