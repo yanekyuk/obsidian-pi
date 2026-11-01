@@ -30,6 +30,8 @@ export function transcriptMarkdown(messages: AgentMessage[], title: string, sess
 				else if (block.type === "toolCall") lines.push(toolLine(block as ToolCallContent));
 			}
 			if (lines.length) parts.push(`**pi**\n\n${lines.join("\n\n")}`);
+		} else if (message.role === "branchSummary" && typeof message.summary === "string" && message.summary.trim()) {
+			parts.push(`**Branch summary**\n\n${message.summary.trim()}`);
 		}
 	}
 	const properties = [`---`, sessionFile ? `${SESSION_PROPERTY}: ${basename(sessionFile)}` : null, `exported: ${date.toISOString().slice(0, 10)}`, `---`].filter(Boolean).join("\n");

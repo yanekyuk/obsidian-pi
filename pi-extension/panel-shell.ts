@@ -10,6 +10,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_SHELL_TIMEOUT_SECONDS = 45;
+export const TREE_COMMAND = "pi-workbench:tree";
+export const BRANCH_ANCHOR_TYPE = "pi-workbench:branch-anchor";
+export const BRANCH_START_TYPE = "pi-workbench:branch-start";
+
+type TreeRequest =
+	| { action: "start" }
+	| { action: "navigate"; targetId: string; summarize?: boolean };
 
 export function environmentForShell(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	const clean = { ...env };
@@ -59,4 +66,32 @@ export default function (pi: ExtensionAPI): void {
 				}),
 		},
 	}));
+
+	// In-place tree navigation and branch markers live on ExtensionCommandContext/ExtensionAPI
+	// rather than top-level RPC commands, so the panel drives them through this internal command.
+	pi.registerCommand(TREE_COMMAND, {
+		description: "Internal Pi Workbench session tree control",
+		handler: async (args, ctx) => {
+			const req = JSON.parse(args) as TreeRequest;
+			if (req.action === "start") {
+				const hasConversation = ctx.sessionManager
+					.getBranch()
+					.some((e: { type?: string; message?: { role?: string } }) => e.type === "message" && e.message?.role !== "system");
+				if (!hasConversation) {
+					throw new Error("Send a message before starting a branch.");
+				}
+				const anchorId = pi.appendEntry(BRANCH_ANCHOR_TYPE, {});
+				pi.appendEntry(BRANCH_START_TYPE, { anchorId });
+				return;
+			}
+			if (req.action === "navigate") {
+				const result = await ctx.navigateTree(req.targetId, {
+					summarize: Boolean(req.summarize),
+				});
+				if (result.cancelled) {
+					throw new Error("Branch navigation was cancelled.");
+				}
+			}
+		},
+	});
 }

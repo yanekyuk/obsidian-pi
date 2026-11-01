@@ -84,9 +84,11 @@ export type AgentMessage =
 			isError: boolean;
 	  }
 	| { role: "bashExecution"; command: string; output: string; exitCode: number | null }
+	| { role: "branchSummary"; summary: string; fromId: string; timestamp?: number }
 	| { role: string; [key: string]: unknown };
 
 export type UserMessage = Extract<AgentMessage, { role: "user" }>;
+export type BranchSummaryMessage = Extract<AgentMessage, { role: "branchSummary" }>;
 
 // One entry of a session file. Entries form a tree through parentId; the session is on the
 // branch that runs from its leaf back to the root.
@@ -97,6 +99,9 @@ export interface SessionEntry {
 	message?: AgentMessage;
 	customType?: string;
 	data?: unknown;
+	summary?: string;
+	fromId?: string;
+	firstKeptEntryId?: string;
 }
 
 export type AssistantMessageEvent =

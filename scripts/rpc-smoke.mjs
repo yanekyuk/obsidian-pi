@@ -46,9 +46,9 @@ export { commandAllowed } from ${JSON.stringify(join(root, "src/obsidianControl.
 export { snapshotBefore, snapshotAfter, unchangedSince } from ${JSON.stringify(join(root, "src/view/revert.ts"))};
 export { transcriptMarkdown } from ${JSON.stringify(join(root, "src/exportNote.ts"))};
 export { resolveLinked, sessionDirs } from ${JSON.stringify(join(root, "src/noteLink.ts"))};
-export { entryIdOf } from ${JSON.stringify(join(root, "src/view/editMessage.ts"))};
+export { activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE } from ${JSON.stringify(join(root, "src/view/editMessage.ts"))};
 export { buildSystemPrompt, rewordMessage, withContext } from ${JSON.stringify(join(root, "src/prompt.ts"))};
-export { DEFAULT_SHELL_TIMEOUT_SECONDS } from ${JSON.stringify(join(root, "pi-extension/panel-shell.ts"))};
+export { DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND } from ${JSON.stringify(join(root, "pi-extension/panel-shell.ts"))};
 export { SearchIndex } from ${JSON.stringify(join(root, "src/search/SearchIndex.ts"))};
 export { default as trimToolOutput } from ${JSON.stringify(join(root, "pi-extension/trim-tool-output.ts"))};`,
 );
@@ -65,7 +65,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, suggestLineup, makerOf, sharedMakers, runDiscussion, discussionMarkdown, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, entryIdOf, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, rewordMessage, withContext, SearchIndex, trimToolOutput } =
+const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, suggestLineup, makerOf, sharedMakers, runDiscussion, discussionMarkdown, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -482,6 +482,36 @@ const check = (ok, label, detail = "") => {
 	const sysPrompt = buildSystemPrompt("Notes", "");
 	check(sysPrompt.includes("vault root ('.')") && sysPrompt.includes("recursive searches across the home directory"), "buildSystemPrompt: scopes searches to the vault and forbids home directory scans");
 	check(typeof DEFAULT_SHELL_TIMEOUT_SECONDS === "number" && DEFAULT_SHELL_TIMEOUT_SECONDS > 0, "DEFAULT_SHELL_TIMEOUT_SECONDS is configured", `${DEFAULT_SHELL_TIMEOUT_SECONDS}s`);
+
+	// Subtopic branching: branch stack, parent history boundary, and finished branch turn reconstruction.
+	const branchTree = [
+		entry("u1", null, { role: "user", content: "Main question", timestamp: 10 }),
+		entry("a1", "u1", { role: "assistant", content: [{ type: "text", text: "Main answer" }], timestamp: 20 }),
+		{ type: "custom", id: "anc1", parentId: "a1", customType: BRANCH_ANCHOR_TYPE, data: {} },
+		{ type: "custom", id: "st1", parentId: "anc1", customType: BRANCH_START_TYPE, data: { anchorId: "anc1" } },
+		entry("u2_old", "st1", { role: "user", content: "Replaced subtopic question", timestamp: 30 }),
+		entry("a2_old", "u2_old", { role: "assistant", content: [{ type: "text", text: "Replaced subtopic answer" }], timestamp: 40 }),
+		entry("u2", "st1", { role: "user", content: "Subtopic question", timestamp: 31 }),
+		entry("a2", "u2", { role: "assistant", content: [{ type: "text", text: "Subtopic answer" }], timestamp: 41 }),
+		{ type: "custom", id: "anc2", parentId: "a2", customType: BRANCH_ANCHOR_TYPE, data: {} },
+		{ type: "custom", id: "st2", parentId: "anc2", customType: BRANCH_START_TYPE, data: { anchorId: "anc2" } },
+		entry("u3", "st2", { role: "user", content: "Nested subtopic", timestamp: 50 }),
+	];
+	check(activePathOf(branchTree, "a2").map((e) => e.id).join() === "u1,a1,anc1,st1,u2,a2", "branch: activePathOf follows parent pointers from root to leaf, skipping replaced turns");
+	const stackAtNested = activeBranchesOf(branchTree, "u3");
+	check(stackAtNested.length === 2 && stackAtNested[0].anchorId === "anc1" && stackAtNested[0].messageCount === 3 && stackAtNested[1].anchorId === "anc2" && stackAtNested[1].messageCount === 1, "branch: nested subtopic branches form a stack with exact message counts");
+	check(entryIdOf({ role: "user", content: "", timestamp: 50 }, branchTree, "u3") === "u3" && entryIdOf({ role: "user", content: "", timestamp: 31 }, branchTree, "u3") === null && entryIdOf({ role: "user", content: "", timestamp: 10 }, branchTree, "u3") === null, "branch: only user messages inside the innermost active branch are editable");
+	// Discarding the outer branch moves leafId back to anc1, popping the branch.
+	check(activeBranchesOf(branchTree, "anc1").length === 0, "branch: discarding back to anchor pops the branch from the active stack");
+	// Finishing the outer branch appends a branch_summary entry at anc1 pointing to fromId = a2.
+	const finishedTree = [
+		...branchTree,
+		{ type: "branch_summary", id: "bs1", parentId: "anc1", fromId: "a2", summary: "The user explored a different conversation branch before returning here.\nSummary of that exploration:\n\n## Goal\nSubtopic summary." },
+	];
+	check(activeBranchesOf(finishedTree, "bs1").length === 0, "branch: finishing a branch pops it from the active stack");
+	const turns = branchTurnsOf("a2", finishedTree);
+	check(turns.length === 2 && turns[0].role === "user" && turns[0].content === "Subtopic question" && turns[1].role === "assistant", "branch: branchTurnsOf reconstructs the kept turns of a finished branch and omits replaced ones");
+	check(cleanBranchSummary(finishedTree.at(-1).summary) === "## Goal\nSubtopic summary.", "branch: cleanBranchSummary strips Pi's default preamble");
 }
 
 // ---- tabs: what the title shows for the tabs out of sight, and what the layout brings back
@@ -706,6 +736,38 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 	await isolated.start({ binary: "pi", args: ["--no-session", "--no-skills", ...extensions], cwd: work, env: { ...env, PI_CODING_AGENT_DIR: isolatedDir } });
 	const theirs = await isolated.getCommands();
 	const usable = await isolated.getAvailableModels();
+
+	// Exercise panel-shell's live RPC tree commands against a real Pi process.
+	let emptyBranchRejected = false;
+	await isolated.startBranch().catch(() => (emptyBranchRejected = true));
+	check(emptyBranchRejected, "live rpc tree: starting a branch in an empty session is rejected");
+
+	const treeSessionFile = join(work, "tree-session.jsonl");
+	writeFileSync(
+		treeSessionFile,
+		[
+			{ type: "session", version: 3, id: "tree-test-1", timestamp: "2026-01-01T00:00:00.000Z", cwd: work },
+			{ type: "message", id: "u1", parentId: null, timestamp: "2026-01-01T00:00:01.000Z", message: { role: "user", content: "First question", timestamp: 1 } },
+			{ type: "message", id: "a1", parentId: "u1", timestamp: "2026-01-01T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "First answer" }], timestamp: 2 } },
+			{ type: "message", id: "u2", parentId: "a1", timestamp: "2026-01-01T00:00:03.000Z", message: { role: "user", content: "Second question", timestamp: 3 } },
+			{ type: "message", id: "a2", parentId: "u2", timestamp: "2026-01-01T00:00:04.000Z", message: { role: "assistant", content: [{ type: "text", text: "Second answer" }], timestamp: 4 } },
+		]
+			.map((o) => JSON.stringify(o))
+			.join("\n") + "\n",
+	);
+	await isolated.switchSession(treeSessionFile);
+	await isolated.startBranch();
+	let treeState = await isolated.getEntries();
+	let openBranches = activeBranchesOf(treeState.entries, treeState.leafId);
+	check(openBranches.length === 1 && openBranches[0].anchorId !== null, "live rpc tree: startBranch appends branch markers on the active path");
+	await isolated.navigateTree(openBranches[0].anchorId, { summarize: false });
+	treeState = await isolated.getEntries();
+	check(activeBranchesOf(treeState.entries, treeState.leafId).length === 0, "live rpc tree: navigateTree to anchor discards the active branch in place");
+	await isolated.navigateTree("u2", { summarize: false });
+	treeState = await isolated.getEntries();
+	const currentFileAfterEdit = (await isolated.getState()).sessionFile;
+	check(treeState.leafId === "a1" && currentFileAfterEdit === treeSessionFile, "live rpc tree: in-place edit rewinds before the edited user message without creating a new session file");
+
 	await isolated.stop();
 	check(isolatedExit && !/error|failed/i.test(isolatedExit.stderr), "the panel's Pi extensions, including the shell boundary, load without complaint", isolatedExit?.stderr.slice(0, 200));
 	// RPC's `bash` command exercises the !/!! path without a model call. A child process
@@ -740,8 +802,9 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 	const shellEnv = JSON.parse(shellResult.data?.output?.trim() ?? "{}");
 	check(shellResult.success && Object.keys(shellEnv).length === 0, "RPC user bash does not leak the isolated profile to an app it launches", JSON.stringify(shellEnv));
 	check(usable.length > 0, "isolated pi: the linked credentials give it models to use", `${usable.length} models`);
-	// Pi's own commands (llama.cpp and, in v1.0.0, MCP) aren't the user's extensions.
-	const builtIn = (c) => c.sourceInfo?.source === "builtin" || (c.sourceInfo?.path ?? "").startsWith("<inline:");
+	// Pi's own commands (llama.cpp and, in v1.0.0, MCP) and the panel's internal tree command aren't the user's extensions.
+	const builtIn = (c) => c.sourceInfo?.source === "builtin" || (c.sourceInfo?.path ?? "").startsWith("<inline:") || c.name === TREE_COMMAND;
+	check(theirs.some((c) => c.name === TREE_COMMAND), "isolated pi: panel-shell registers the internal tree command");
 	check(theirs.filter((c) => (c.source === "extension" || c.source === "skill") && !builtIn(c)).length === 0, "isolated pi: none of the user's extensions or skills are loaded", `${commands.filter((c) => c.source === "extension").length} extension commands in the user's own pi`);
 }
 

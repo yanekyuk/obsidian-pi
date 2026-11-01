@@ -140,6 +140,7 @@ export class ChatView extends ItemView {
 		if (this.tabs.length > 1) menu.addItem((i) => i.setTitle("Close tab").setIcon("x").onClick(() => void this.closeTab(tab)));
 		menu.addSeparator();
 		menu.addItem((i) => i.setTitle("Rename session…").setIcon("pencil").onClick(() => void tab.renameCurrent()));
+		menu.addItem((i) => i.setTitle("Fork to new tab").setIcon("git-fork").onClick(() => void this.forkCurrentTab()));
 		const note = this.app.workspace.getActiveFile();
 		if (note && note.extension === "md") {
 			const linked = tab.isLinkedTo(note);
@@ -423,6 +424,11 @@ export class ChatView extends ItemView {
 
 	renameCurrent(): Promise<void> {
 		return this.current().renameCurrent();
+	}
+
+	async forkCurrentTab(): Promise<void> {
+		const forked = await this.current().createForkFile();
+		if (forked) await this.openSession(forked);
 	}
 
 	configureAdvisor(): Promise<void> {

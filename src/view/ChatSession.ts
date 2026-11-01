@@ -13,7 +13,7 @@ import { hasLegacyMcpCommand, probeMcp, unusableMcpServers, vaultMcpServers } fr
 import { readActiveContext, rewordMessage, splitContext, withContext } from "../prompt";
 import { findRequired, manualInstallCommands, OBSIDIAN_SKILLS, SKILLS_PACKAGE } from "../requirements";
 import { PiRpcClient } from "../rpc/PiRpcClient";
-import type { AgentMessage, AssistantMessageEvent, ExtensionUiRequest, ImageContent, RpcEvent, SessionState, SlashCommand, ToolCallContent, UserMessage } from "../rpc/types";
+import type { AgentMessage, AssistantMessageEvent, BranchSummaryMessage, ExtensionUiRequest, ImageContent, RpcEvent, SessionEntry, SessionState, SlashCommand, ToolCallContent, UserMessage } from "../rpc/types";
 import { contentText } from "../sessions";
 import { AttachmentTray, imageFilesOf, imageSrc } from "./Attachments";
 import { MarkdownBlock, ThinkingBlock, ToolCard, ToolGroup, formatActivityText, rerenderMarkdownIn, type RenderHost } from "./blocks";
@@ -28,7 +28,7 @@ import { appendToNote, createNote, createNoteFrom, insertIntoNote, markdownOf } 
 import { transcriptMarkdown } from "../exportNote";
 import { linkedSession, writeLink } from "../noteLink";
 import { EDITING_TOOLS, snapshotAfter, snapshotBefore, swapVersion, unchangedSince, type FileSnapshot } from "./revert";
-import { editInPlace, entryIdOf } from "./editMessage";
+import { activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, editInPlace, entryIdOf, TREE_COMMAND, type ActiveBranch } from "./editMessage";
 
 const STICK_TO_BOTTOM_PX = 48;
 const MCP_RECHECK_MS = 30_000;
@@ -132,9 +132,15 @@ export class ChatSession {
 	private held: HeldMessage[] = [];
 	private flushing = false;
 	private piQueue: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
+	private activeBranches: ActiveBranch[] = [];
+	private hasConversation = false;
 
 	private messagesEl!: HTMLElement;
 	private bannerEl!: HTMLElement;
+	private branchBarEl!: HTMLElement;
+	private branchBarLabelEl!: HTMLElement;
+	private branchDiscardBtn!: HTMLButtonElement;
+	private branchFinishBtn!: HTMLButtonElement;
 	private queueEl!: HTMLElement;
 	private widgetsAboveEl!: HTMLElement;
 	private widgetsBelowEl!: HTMLElement;
@@ -154,6 +160,7 @@ export class ChatSession {
 	private deliveryModesEl!: HTMLElement;
 	private steerModeBtn!: HTMLButtonElement;
 	private queueModeBtn!: HTMLButtonElement;
+	private branchBtn!: HTMLButtonElement;
 	private sendBtn!: HTMLElement;
 	private suggest!: ComposerSuggest;
 	private attachments!: AttachmentTray;
@@ -288,6 +295,24 @@ export class ChatSession {
 		this.bannerEl = root.createDiv({ cls: "pi-banner" });
 		this.bannerEl.hide();
 
+		this.branchBarEl = root.createDiv({ cls: "pi-branch-bar" });
+		this.branchBarEl.hide();
+		const branchInfo = this.branchBarEl.createDiv({ cls: "pi-branch-bar-info" });
+		setIcon(branchInfo.createSpan({ cls: "pi-icon" }), "git-branch");
+		this.branchBarLabelEl = branchInfo.createSpan({ cls: "pi-branch-bar-label", text: "Subtopic branch" });
+		const branchActions = this.branchBarEl.createDiv({ cls: "pi-branch-bar-actions" });
+		this.branchDiscardBtn = branchActions.createEl("button", {
+			text: "Discard",
+			attr: { type: "button", "aria-label": "Discard this branch and return to the parent thread" },
+		});
+		this.branchFinishBtn = branchActions.createEl("button", {
+			cls: "mod-cta",
+			text: "Finish",
+			attr: { type: "button", "aria-label": "Summarize this branch and return to the parent thread" },
+		});
+		this.branchDiscardBtn.addEventListener("click", () => void this.discardBranch());
+		this.branchFinishBtn.addEventListener("click", () => void this.finishBranch());
+
 		this.messagesEl = root.createDiv({ cls: "pi-messages" });
 		this.messagesEl.addEventListener("scroll", () => {
 			if (!this.el.isShown()) return;
@@ -383,6 +408,13 @@ export class ChatSession {
 		setIcon(this.stopBtn, "square");
 		this.stopBtn.addEventListener("click", () => void this.stop());
 		this.stopBtn.hide();
+		this.branchBtn = bar.createEl("button", {
+			cls: "pi-branch-btn clickable-icon",
+			attr: { type: "button", "aria-label": "Branch from here with this message" },
+		});
+		setIcon(this.branchBtn, "git-branch");
+		this.branchBtn.addEventListener("click", () => void this.sendInBranch());
+		this.branchBtn.hide();
 		this.sendBtn = bar.createEl("button", { cls: "pi-send mod-cta" });
 		setIcon(this.sendBtn, "arrow-up");
 		this.sendBtn.addEventListener("click", () => void this.send());
@@ -462,7 +494,9 @@ export class ChatSession {
 		this.steerModeBtn.setAttr("aria-pressed", this.deliveryMode === "steer" ? "true" : "false");
 		this.queueModeBtn.setAttr("aria-pressed", this.deliveryMode === "followUp" ? "true" : "false");
 		// At rest only Send appears. While pi works Stop takes its place until a draft is ready.
+		this.branchBtn.toggle(!waiting && this.hasConversation);
 		this.sendBtn.toggle(!this.busy || hasDraft);
+		this.renderBranchBar();
 		if (this.compacting) {
 			this.sendBtn.setAttr("aria-label", `Send after compaction as ${this.deliveryMode === "steer" ? "steering" : "a follow-up"} (Enter)`);
 			this.inputEl.placeholder = "Compacting… what you send now goes out when it's done";
@@ -484,6 +518,17 @@ export class ChatSession {
 		this.el.toggleClass("is-compacting", compacting);
 		this.renderComposerMode();
 		this.host.changed(this);
+	}
+
+	private renderBranchBar(): void {
+		if (!this.branchBarEl) return;
+		const depth = this.activeBranches.length;
+		this.branchBarEl.toggle(depth > 0);
+		if (!depth) return;
+		this.branchBarLabelEl.setText(depth > 1 ? `Subtopic branch (level ${depth})` : "Subtopic branch");
+		const disabled = this.isBusy || this.connecting;
+		this.branchDiscardBtn.disabled = disabled;
+		this.branchFinishBtn.disabled = disabled;
 	}
 
 	// pi's MCP adapter is lazy: a fresh pi knows of the vault's servers but has not connected,
@@ -588,7 +633,7 @@ export class ChatSession {
 		try {
 			await this.client.start(await this.plugin.buildSpawnOptions(session ?? this.resumeTarget()));
 			await this.syncSession();
-			const fromPi = await this.client.getCommands();
+			const fromPi = (await this.client.getCommands()).filter((c) => c.name !== TREE_COMMAND);
 			this.suggest.commands = [...PANEL_COMMANDS.filter((c) => !fromPi.some((p) => p.name === c.name)), ...fromPi];
 			this.renderEmptyState();
 			void this.checkMcp(true);
@@ -706,7 +751,11 @@ export class ChatSession {
 		this.firstPrompt = "";
 		this.savedTitle = "";
 		this.setBusy(this.state.isStreaming);
-		this.renderTranscript(await this.client.getMessages());
+		const [messages, { entries, leafId }] = await Promise.all([
+			this.client.getMessages(),
+			this.client.getEntries().catch(() => ({ entries: [] as SessionEntry[], leafId: null })),
+		]);
+		this.renderTranscript(messages, entries, leafId);
 		this.renderControls();
 		void this.refreshStats();
 		this.host.sessionsChanged();
@@ -898,10 +947,8 @@ export class ChatSession {
 		}
 	}
 
-	// Takes the conversation back to just before `message` and sends `text` in its place, with
-	// the note context and images the message had. pi can only branch into a new session file
-	// over RPC, so the conversation as it was stays in the session list and the tab goes on in
-	// the branch.
+	// Takes the conversation back to just before `message` in place (within the same session file)
+	// and sends `text` in its place, with the note context and images the message had.
 	private async rerunFrom(message: UserMessage, text: string): Promise<void> {
 		const images = imagesOf(message);
 		if (!text && !images.length) return;
@@ -918,15 +965,128 @@ export class ChatSession {
 			const { entries, leafId } = await this.client.getEntries();
 			const entryId = entryIdOf(message, entries, leafId);
 			if (!entryId) {
-				new Notice("Couldn't find that message in the session.");
+				new Notice("Couldn't find that message in the active branch.");
 				return;
 			}
-			const { cancelled } = await this.client.fork(entryId);
-			if (cancelled) return;
+			await this.client.navigateTree(entryId, { summarize: false });
 			await this.syncSession();
 			await this.client.prompt(rewordMessage(contentText(message.content), text), { images });
 		} catch (err) {
 			new Notice(`pi: ${(err as Error).message}`);
+		}
+	}
+
+	// Starts a subtopic branch at the current leaf and sends the composer draft as its first turn.
+	private async sendInBranch(): Promise<void> {
+		const text = this.inputEl.value.trim();
+		if (!text && !this.attachments.count) {
+			new Notice("Write a message in the composer to start a branch.");
+			this.focusComposer();
+			return;
+		}
+		if (!this.client.running) {
+			new Notice("pi isn't running. Start it again with the panel's ↻ button.");
+			return;
+		}
+		if (this.isBusy) {
+			new Notice("Wait for pi to finish before starting a branch.");
+			return;
+		}
+		if (!this.hasConversation) {
+			new Notice("Send a message before starting a branch.");
+			return;
+		}
+		const command = text.match(/^\/(\S+)/)?.[1];
+		if (
+			command &&
+			(PANEL_COMMANDS.some((c) => c.name === command) ||
+				this.suggest.commands.some((c) => c.name === command && c.source === "extension"))
+		) {
+			new Notice("Commands run in the current thread, not in a branch.");
+			return;
+		}
+		this.host.closeDrawer();
+		const message = withContext(text, this.shareNote ? readActiveContext(this.app) : null);
+		const images = this.attachments.take();
+		this.inputEl.value = "";
+		this.autoGrow();
+		this.stickToBottom = true;
+		let branchAnchorId: string | null = null;
+		try {
+			await this.client.startBranch();
+			const { entries, leafId } = await this.client.getEntries();
+			this.activeBranches = activeBranchesOf(entries, leafId);
+			branchAnchorId = this.activeBranches[this.activeBranches.length - 1]?.anchorId ?? null;
+			this.freezeParentHistoryDom();
+			this.renderBranchDivider();
+			this.renderComposerMode();
+			await this.client.prompt(message, { images });
+		} catch (err) {
+			if (branchAnchorId) {
+				await this.client.navigateTree(branchAnchorId, { summarize: false }).catch(() => {});
+				await this.syncSession().catch(() => {});
+			}
+			this.inputEl.value = text;
+			this.attachments.restore(images);
+			this.autoGrow();
+			new Notice(`pi: ${(err as Error).message}`);
+		}
+	}
+
+	private async discardBranch(): Promise<void> {
+		if (!this.client.running || this.isBusy) return;
+		const branch = this.activeBranches[this.activeBranches.length - 1];
+		if (!branch) return;
+		try {
+			await this.client.navigateTree(branch.anchorId, { summarize: false });
+			await this.syncSession();
+			this.focusComposer();
+		} catch (err) {
+			new Notice(`pi: ${(err as Error).message}`);
+		}
+	}
+
+	private async finishBranch(): Promise<void> {
+		if (!this.client.running || this.isBusy) return;
+		const branch = this.activeBranches[this.activeBranches.length - 1];
+		if (!branch) return;
+		this.setCompacting(true);
+		this.setActivity("Summarizing branch…");
+		try {
+			await this.client.navigateTree(branch.anchorId, { summarize: true });
+			await this.syncSession();
+			this.focusComposer();
+		} catch (err) {
+			new Notice(`pi: ${(err as Error).message}`);
+		} finally {
+			this.setCompacting(false);
+			this.setActivity(this.busy ? "Working…" : null);
+		}
+	}
+
+	// Creates a new session file containing the active branch up through the latest turn,
+	// while keeping this tab on its original session so the caller can open the fork in a new tab.
+	async createForkFile(): Promise<string | null> {
+		if (!this.client.running || !this.heldSessionFile || !this.hasConversation) {
+			new Notice("Nothing to fork yet.");
+			return null;
+		}
+		if (!this.replaceable) {
+			new Notice("pi is still working in this session. Fork it once it has finished.");
+			return null;
+		}
+		const original = this.heldSessionFile;
+		try {
+			const { cancelled } = await this.client.cloneSession();
+			if (cancelled) return null;
+			const forked = (await this.client.getState()).sessionFile ?? null;
+			await this.client.switchSession(original);
+			this.state = await this.client.getState();
+			this.host.sessionsChanged();
+			return forked && forked !== original ? forked : null;
+		} catch (err) {
+			new Notice(`pi: ${(err as Error).message}`);
+			return null;
 		}
 	}
 
@@ -1093,9 +1253,11 @@ export class ChatSession {
 				break;
 			case "message_start":
 				if (e.message.role === "user") {
+					this.hasConversation = true;
 					this.settleToolGroup();
 					this.live = null;
 					this.renderUser(e.message as UserMessage);
+					this.renderComposerMode();
 				} else if (e.message.role === "assistant") {
 					this.live = this.beginAssistant();
 				}
@@ -1170,6 +1332,7 @@ export class ChatSession {
 				if (!e.success) this.renderNotice(e.finalError ?? "Retries exhausted", true);
 				break;
 			case "extension_error":
+				if (e.extensionPath === `command:${TREE_COMMAND}`) break;
 				console.warn(`[pi-workbench] extension error in ${e.extensionPath} (${e.event}): ${e.error}`);
 				break;
 			case "extension_ui_request":
@@ -1307,7 +1470,7 @@ export class ChatSession {
 
 	// ---------------------------------------------------------------- transcript
 
-	private renderTranscript(messages: AgentMessage[]): void {
+	private renderTranscript(messages: AgentMessage[], entries: SessionEntry[] = [], leafId: string | null = null): void {
 		this.messagesEl.empty();
 		this.toolCards.clear();
 		this.settleToolGroup();
@@ -1315,14 +1478,34 @@ export class ChatSession {
 		// Whatever was pending belonged to the session that just went away.
 		this.dialogs.cancelAll();
 		this.side.reset();
+		this.activeBranches = activeBranchesOf(entries, leafId);
+		const currentBranch = this.activeBranches[this.activeBranches.length - 1] ?? null;
+		const isRendered = (m: AgentMessage) =>
+			m.role === "user" || m.role === "assistant" || m.role === "toolResult" || m.role === "branchSummary";
+		const renderedTotal = messages.filter(isRendered).length;
+		this.hasConversation = renderedTotal > 0 || entries.some((e) => e.type === "message" && e.message?.role !== "system");
+		const parentItemCount = currentBranch ? Math.max(0, renderedTotal - currentBranch.messageCount) : renderedTotal;
+
+		let seenRendered = 0;
+		let dividerShown = false;
 		let tasks: ReturnType<typeof tasksFrom> = null;
 		for (const m of messages) {
+			if (isRendered(m)) {
+				if (currentBranch && !dividerShown && seenRendered >= parentItemCount) {
+					this.settleToolGroup();
+					this.live = null;
+					this.renderBranchDivider();
+					dividerShown = true;
+				}
+				seenRendered++;
+			}
+			const inParentHistory = Boolean(currentBranch && !dividerShown);
 			if (m.role === "user") {
 				this.settleToolGroup();
 				this.live = null;
-				this.renderUser(m as UserMessage);
+				this.renderUser(m as UserMessage, !inParentHistory, inParentHistory);
 			} else if (m.role === "assistant") {
-				const live = this.beginAssistant();
+				const live = this.beginAssistant(inParentHistory);
 				this.finishAssistant(live, m as AssistantMessage);
 				const isToolTurn =
 					(m as AssistantMessage).stopReason === "toolUse" ||
@@ -1338,25 +1521,31 @@ export class ChatSession {
 				card.setStatus(r.isError ? "error" : "done");
 				// Every todo result is a full snapshot, so the last one is the current list.
 				if (r.toolName === "todo" && !r.isError) tasks = tasksFrom(r.details) ?? tasks;
+			} else if (m.role === "branchSummary") {
+				this.settleToolGroup();
+				this.live = null;
+				const b = m as BranchSummaryMessage;
+				this.renderBranchSummary(b, branchTurnsOf(b.fromId, entries), entries, inParentHistory);
 			}
 		}
 		this.settleToolGroup();
 		this.live = null;
-		this.todos.set(tasks);
-		if (this.client.running) {
-			void this.client.getEntries().then(({ entries }) => {
-				for (let i = entries.length - 1; i >= 0; i--) {
-					const entry = entries[i];
-					if (entry.type === "custom" && entry.customType === "rpiv-todo-state") {
-						const snapshot = tasksFrom(entry.data);
-						if (snapshot) {
-							this.todos.set(snapshot);
-							break;
-						}
-					}
-				}
-			}).catch(() => {});
+		if (currentBranch && !dividerShown) {
+			this.renderBranchDivider();
 		}
+		const activeEntries = leafId ? activePathOf(entries, leafId) : entries;
+		for (let i = activeEntries.length - 1; i >= 0; i--) {
+			const entry = activeEntries[i];
+			if (entry.type === "custom" && entry.customType === "rpiv-todo-state") {
+				const snapshot = tasksFrom(entry.data);
+				if (snapshot) {
+					tasks = snapshot;
+					break;
+				}
+			}
+		}
+		this.todos.set(tasks);
+		this.renderComposerMode();
 		this.renderEmptyState();
 		this.stickToBottom = true;
 		this.keepScrolled();
@@ -1382,15 +1571,18 @@ export class ChatSession {
 		return this.messagesEl.createDiv({ cls: `pi-msg ${cls}` });
 	}
 
-	private renderUser(message: UserMessage): void {
-		this.settleToolGroup();
-		this.live = null;
+	private renderUser(message: UserMessage, editable = true, inParentHistory = false, container: HTMLElement = this.messagesEl): void {
+		if (container === this.messagesEl) {
+			this.settleToolGroup();
+			this.live = null;
+		}
 		const { text, notePath, hasSelection } = splitContext(contentText(message.content));
-		if (!this.firstPrompt) {
+		if (!this.firstPrompt && container === this.messagesEl) {
 			this.firstPrompt = text.replace(/\s+/g, " ").trim().slice(0, 60);
 			this.host.changed(this);
 		}
-		const el = this.addMessageEl("pi-msg-user");
+		if (container === this.messagesEl) this.messagesEl.querySelector(".pi-empty")?.remove();
+		const el = container.createDiv({ cls: `pi-msg pi-msg-user${inParentHistory ? " is-parent-history" : ""}${editable ? "" : " is-readonly"}` });
 		if (notePath) {
 			const chip = el.createDiv({ cls: "pi-msg-context" });
 			setIcon(chip.createSpan({ cls: "pi-icon" }), hasSelection ? "text-select" : "file-text");
@@ -1406,10 +1598,102 @@ export class ChatSession {
 			}
 		}
 		if (text) new MarkdownBlock(this.renderHost, el.createDiv({ cls: "pi-text markdown-rendered" })).set(text);
-		if (message.timestamp !== undefined) {
+		if (editable && message.timestamp !== undefined) {
 			const edit = el.createDiv({ cls: "pi-msg-actions" }).createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Edit and run again from here" } });
 			setIcon(edit, "pencil");
 			edit.addEventListener("click", () => editInPlace(el, text, (edited) => this.rerunFrom(message, edited)));
+		}
+		this.keepScrolled();
+	}
+
+	private freezeParentHistoryDom(): void {
+		this.settleToolGroup();
+		this.live = null;
+		this.messagesEl.querySelectorAll<HTMLElement>(":scope > .pi-branch-divider").forEach((el) => el.remove());
+		for (const el of Array.from(this.messagesEl.children) as HTMLElement[]) {
+			el.addClass("is-parent-history");
+			if (el.classList.contains("pi-msg-user")) {
+				el.querySelector(":scope > .pi-msg-actions")?.remove();
+			}
+		}
+	}
+
+	private renderBranchDivider(): void {
+		this.messagesEl.querySelector(".pi-empty")?.remove();
+		const divider = this.messagesEl.createDiv({ cls: "pi-branch-divider" });
+		setIcon(divider.createSpan({ cls: "pi-icon" }), "git-branch");
+		divider.createSpan({ text: "Subtopic branch" });
+		this.keepScrolled();
+	}
+
+	// A finished subtopic branch: collapsed by default, showing the summary when opened and
+	// offering the original branch turns read-only underneath.
+	private renderBranchSummary(
+		message: BranchSummaryMessage,
+		turns: AgentMessage[],
+		entries: SessionEntry[],
+		inParentHistory = false,
+		container: HTMLElement = this.messagesEl,
+	): void {
+		if (container === this.messagesEl) this.messagesEl.querySelector(".pi-empty")?.remove();
+		const card = container.createEl("details", { cls: `pi-branch-card${inParentHistory ? " is-parent-history" : ""}` });
+		const header = card.createEl("summary", { cls: "pi-branch-card-header" });
+		setIcon(header.createSpan({ cls: "pi-icon pi-branch-card-icon" }), "git-branch");
+
+		const firstUser = turns.find((t): t is UserMessage => t.role === "user");
+		const topic = firstUser ? splitContext(contentText(firstUser.content)).text.replace(/\s+/g, " ").trim() : "";
+		const shortTopic = topic.length > 60 ? `${topic.slice(0, 59)}…` : topic;
+		header.createSpan({ cls: "pi-branch-card-title", text: shortTopic ? `Branch summary · ${shortTopic}` : "Branch summary" });
+
+		const userTurnCount = turns.filter((t) => t.role === "user").length;
+		if (userTurnCount > 0) {
+			header.createSpan({ cls: "pi-branch-card-meta", text: `${userTurnCount} ${userTurnCount === 1 ? "turn" : "turns"}` });
+		}
+		setIcon(header.createSpan({ cls: "pi-branch-card-chevron pi-icon" }), "chevron-right");
+
+		const body = card.createDiv({ cls: "pi-branch-card-body" });
+		new MarkdownBlock(this.renderHost, body.createDiv({ cls: "pi-branch-card-summary pi-text markdown-rendered" })).set(cleanBranchSummary(message.summary));
+
+		if (turns.length > 0) {
+			const turnsDetails = body.createEl("details", { cls: "pi-branch-turns" });
+			const turnsHeader = turnsDetails.createEl("summary", { cls: "pi-branch-turns-header" });
+			setIcon(turnsHeader.createSpan({ cls: "pi-icon" }), "history");
+			turnsHeader.createSpan({ cls: "pi-branch-turns-title", text: "View original branch turns" });
+			setIcon(turnsHeader.createSpan({ cls: "pi-branch-turns-chevron pi-icon" }), "chevron-right");
+
+			const turnsBody = turnsDetails.createDiv({ cls: "pi-branch-turns-body" });
+			let rendered = false;
+			turnsDetails.addEventListener("toggle", () => {
+				if (!turnsDetails.open || rendered) return;
+				rendered = true;
+				this.renderReadOnlyTurns(turnsBody, turns, entries);
+			});
+		}
+		this.keepScrolled();
+	}
+
+	private renderReadOnlyTurns(container: HTMLElement, turns: AgentMessage[], entries: SessionEntry[]): void {
+		for (const m of turns) {
+			if (m.role === "user") {
+				this.renderUser(m as UserMessage, false, false, container);
+			} else if (m.role === "assistant") {
+				const assistant = m as AssistantMessage;
+				const el = container.createDiv({ cls: "pi-msg pi-msg-assistant is-readonly" });
+				for (const block of assistant.content) {
+					if (block.type === "text" && block.text.trim()) {
+						new MarkdownBlock(this.renderHost, el.createDiv({ cls: "pi-text markdown-rendered" })).set(block.text);
+					} else if (block.type === "toolCall") {
+						const call = block as ToolCallContent;
+						const toolLine = el.createDiv({ cls: "pi-branch-tool-line" });
+						setIcon(toolLine.createSpan({ cls: "pi-icon" }), "wrench");
+						toolLine.createSpan({ text: formatActivityText(call.name, call.arguments).replace(/…$/, "") });
+					}
+				}
+				if (!el.childElementCount) el.remove();
+			} else if (m.role === "branchSummary") {
+				const b = m as BranchSummaryMessage;
+				this.renderBranchSummary(b, branchTurnsOf(b.fromId, entries), entries, false, container);
+			}
 		}
 		this.keepScrolled();
 	}
@@ -1448,13 +1732,14 @@ export class ChatSession {
 		this.keepScrolled();
 	}
 
-	private beginAssistant(): LiveAssistant {
+	private beginAssistant(inParentHistory = false): LiveAssistant {
 		const last = this.messagesEl.lastElementChild as HTMLElement | null;
 		const texts = this.live?.el === last ? this.live.texts : [];
-		if (last?.classList.contains("pi-msg-assistant")) {
+		if (last?.classList.contains("pi-msg-assistant") && last.classList.contains("is-parent-history") === inParentHistory) {
 			return (this.live = { el: last, blocks: new Map(), texts });
 		}
-		return (this.live = { el: this.addMessageEl("pi-msg-assistant"), blocks: new Map(), texts: [] });
+		const cls = inParentHistory ? "pi-msg-assistant is-parent-history" : "pi-msg-assistant";
+		return (this.live = { el: this.addMessageEl(cls), blocks: new Map(), texts: [] });
 	}
 
 	private settleToolGroup(): void {

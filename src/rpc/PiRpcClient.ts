@@ -271,6 +271,31 @@ export class PiRpcClient {
 		return this.request("get_entries");
 	}
 
+	// Marks the start of an in-place subtopic branch at the current leaf (via panel-shell.ts).
+	startBranch(): Promise<void> {
+		return this.runTreeCommand({ action: "start" });
+	}
+
+	// Moves the active leaf inside the current session file, optionally summarizing the abandoned path.
+	navigateTree(targetId: string, opts: { summarize?: boolean } = {}): Promise<void> {
+		return this.runTreeCommand({ action: "navigate", targetId, summarize: opts.summarize });
+	}
+
+	private async runTreeCommand(payload: Record<string, unknown>): Promise<void> {
+		let commandError: string | null = null;
+		const off = this.onEvent((e) => {
+			if (e.type === "extension_error" && e.extensionPath === "command:pi-workbench:tree") {
+				commandError = e.error;
+			}
+		});
+		try {
+			await this.prompt(`/pi-workbench:tree ${JSON.stringify(payload)}`);
+		} finally {
+			off();
+		}
+		if (commandError) throw new Error(commandError);
+	}
+
 	compact(customInstructions?: string): Promise<unknown> {
 		return this.request("compact", customInstructions ? { customInstructions } : {});
 	}
