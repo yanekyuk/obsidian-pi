@@ -5,8 +5,8 @@ import { renderInline } from "./markdown";
 
 export type UiAnswer = { value: string } | { confirmed: boolean } | { cancelled: true };
 
-// A question of the panel's own making, drawn by its owner instead of as a plain dialog (the
-// A2A lineup, for one). The dock still queues it, dismisses it with Esc and answers it once.
+// A question of the panel's own making, drawn by its owner instead of as a plain dialog.
+// The dock still queues it, dismisses it with Esc and answers it once.
 export interface DialogForm {
 	header: string;
 	icon: string;

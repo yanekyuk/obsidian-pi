@@ -33,6 +33,8 @@ export interface ToolFiles {
 	absolute(path: string): string;
 	// Hands a file or folder outside the vault to the system's default app. Resolves to what went wrong, if anything.
 	openExternally(path: string): Promise<string | null>;
+	// Reads an image file for previewing inside the card.
+	readImage?(path: string): Promise<Uint8Array>;
 }
 
 export interface RenderHost {
@@ -397,9 +399,15 @@ export class ToolCard {
 			this.imagesEl?.remove();
 			this.imagesEl = this.bodyEl.createDiv({ cls: "pi-tool-images" });
 			try {
-				const file = this.files.absolute(path);
-				if ((await fs.stat(file)).size > MAX_IMAGE_BYTES) throw new Error("the file is too large to preview");
-				const url = URL.createObjectURL(new Blob([await fs.readFile(file)], { type: imageTypeOf(path) ?? "" }));
+				let bytes: Uint8Array;
+				if (this.files.readImage) {
+					bytes = await this.files.readImage(path);
+				} else {
+					const file = this.files.absolute(path);
+					if ((await fs.stat(file)).size > MAX_IMAGE_BYTES) throw new Error("the file is too large to preview");
+					bytes = await fs.readFile(file);
+				}
+				const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: imageTypeOf(path) ?? "" }));
 				const img = this.addImage(url);
 				img.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
 				img.addEventListener("error", () => URL.revokeObjectURL(url), { once: true });

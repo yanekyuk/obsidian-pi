@@ -13,11 +13,19 @@ import type {
 	ThinkingLevel,
 } from "./types";
 
+export interface PiRemoteSpawnOptions {
+	wsUrl: string;
+	sessionFile: string | null;
+	overrides?: object;
+	onVaultPath?: (vaultPath: string) => void;
+}
+
 export interface PiSpawnOptions {
 	binary: string;
 	args: string[];
 	cwd: string;
 	env: NodeJS.ProcessEnv;
+	remote?: PiRemoteSpawnOptions;
 }
 
 interface Pending {
@@ -36,6 +44,7 @@ const STDERR_TAIL = 4000;
 
 export class PiRpcClient {
 	private proc: ChildProcessWithoutNullStreams | null = null;
+	private ws: WebSocket | null = null;
 	private pending = new Map<string, Pending>();
 	private eventListeners = new Set<EventListener>();
 	private exitListeners = new Set<ExitListener>();
@@ -44,7 +53,7 @@ export class PiRpcClient {
 	private stopping = false;
 
 	get running(): boolean {
-		return this.proc !== null;
+		return this.proc !== null || this.ws !== null;
 	}
 
 	onEvent(fn: EventListener): () => void {
@@ -58,9 +67,10 @@ export class PiRpcClient {
 	}
 
 	start(opts: PiSpawnOptions): Promise<void> {
-		if (this.proc) return Promise.resolve();
+		if (this.proc || this.ws) return Promise.resolve();
 		this.stopping = false;
 		this.stderrTail = "";
+		if (opts.remote) return this.startRemote(opts.remote);
 
 		return new Promise((resolve, reject) => {
 			const proc = spawn(opts.binary, ["--mode", "rpc", ...opts.args], {
@@ -92,7 +102,98 @@ export class PiRpcClient {
 		});
 	}
 
+	private startRemote(remote: PiRemoteSpawnOptions): Promise<void> {
+		return new Promise((resolve, reject) => {
+			let ws: WebSocket;
+			try {
+				ws = new WebSocket(remote.wsUrl);
+			} catch (err) {
+				reject(err as Error);
+				return;
+			}
+			let settled = false;
+
+			ws.addEventListener("open", () => {
+				ws.send(JSON.stringify({
+					type: "pi_workbench_init",
+					sessionFile: remote.sessionFile,
+					overrides: remote.overrides,
+				}));
+			});
+
+			ws.addEventListener("message", (evt) => {
+				const raw = typeof evt.data === "string" ? evt.data : String(evt.data ?? "");
+				for (const line of raw.split("\n")) {
+					const trimmed = line.endsWith("\r") ? line.slice(0, -1) : line;
+					if (!trimmed) continue;
+					try {
+						const parsed = JSON.parse(trimmed) as {
+							type?: string;
+							error?: string;
+							vaultPath?: string;
+							code?: number | null;
+							stderr?: string;
+							expected?: boolean;
+						};
+						if (parsed.type === "pi_workbench_ready") {
+							if (parsed.vaultPath) remote.onVaultPath?.(parsed.vaultPath);
+							if (!settled) {
+								settled = true;
+								this.ws = ws;
+								resolve();
+							}
+							continue;
+						}
+						if (parsed.type === "pi_workbench_error") {
+							const err = new Error(parsed.error || "Remote pi server rejected the connection.");
+							if (!settled) {
+								settled = true;
+								ws.close();
+								reject(err);
+							} else {
+								this.stderrTail = err.message;
+								this.handleWsExit(ws, 1, false);
+							}
+							continue;
+						}
+						if (parsed.type === "pi_workbench_exit") {
+							if (typeof parsed.stderr === "string") this.stderrTail = parsed.stderr;
+							this.handleWsExit(ws, parsed.code ?? null, Boolean(parsed.expected) || this.stopping);
+							continue;
+						}
+					} catch {
+						// Pass to handleLine
+					}
+					this.handleLine(trimmed);
+				}
+			});
+
+			ws.addEventListener("error", () => {
+				if (!settled) {
+					settled = true;
+					reject(new Error("Could not connect to the remote pi server."));
+				}
+			});
+
+			ws.addEventListener("close", () => {
+				if (!settled) {
+					settled = true;
+					reject(new Error("Connection to the remote pi server closed before pi started."));
+					return;
+				}
+				this.handleWsExit(ws, null, this.stopping);
+			});
+		});
+	}
+
 	async stop(): Promise<void> {
+		if (this.ws) {
+			const ws = this.ws;
+			this.stopping = true;
+			ws.close();
+			this.handleWsExit(ws, 0, true);
+			return;
+		}
 		const proc = this.proc;
 		if (!proc) return;
 		this.stopping = true;
@@ -145,6 +246,16 @@ export class PiRpcClient {
 	private handleExit(proc: ChildProcessWithoutNullStreams, code: number | null): void {
 		if (this.proc !== proc && this.proc !== null) return;
 		this.proc = null;
+		this.finishExit(code, this.stopping);
+	}
+
+	private handleWsExit(ws: WebSocket, code: number | null, expected: boolean): void {
+		if (this.ws !== ws) return;
+		this.ws = null;
+		this.finishExit(code, expected);
+	}
+
+	private finishExit(code: number | null, expected: boolean): void {
 		const stderr = this.stderrTail.trim();
 		const tail = stderr.split("\n").slice(-12).join("\n");
 		const err = new Error(tail || (code === null ? "pi process exited" : `pi exited with code ${code}`));
@@ -153,11 +264,15 @@ export class PiRpcClient {
 			pending.reject(err);
 		}
 		this.pending.clear();
-		const info = { code, stderr, expected: this.stopping };
+		const info = { code, stderr, expected };
 		for (const fn of this.exitListeners) fn(info);
 	}
 
 	private write(payload: Record<string, unknown>): void {
+		if (this.ws) {
+			this.ws.send(JSON.stringify(payload));
+			return;
+		}
 		if (!this.proc) throw new Error("pi is not running");
 		this.proc.stdin.write(JSON.stringify(payload) + "\n");
 	}

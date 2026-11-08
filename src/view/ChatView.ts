@@ -1,6 +1,4 @@
 import { ItemView, Menu, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
-import { existsSync } from "fs";
-import { readAdvisorConfig } from "../advisor";
 import type PiAgentPlugin from "../main";
 import type { SessionSummary } from "../sessions";
 import { ChatSession, type SessionHost } from "./ChatSession";
@@ -10,9 +8,6 @@ import { SessionsDrawer } from "./SessionsDrawer";
 import { TabSwitcher, renderStatus, summarize } from "./TabSwitcher";
 
 export const VIEW_TYPE_PI = "pi-workbench-chat";
-
-// Electron's trash keeps deletion reversible. It is external to the bundle and has no types here.
-const { shell } = require("electron") as { shell: { trashItem(path: string): Promise<void> } };
 
 // The chat panel: a toolbar, the session history, and one or more tabs, each a conversation
 // with its own pi. One tab is on screen; the others keep working behind the title's dropdown.
@@ -81,7 +76,7 @@ export class ChatView extends ItemView {
 	async setState(state: unknown, result: ViewStateResult): Promise<void> {
 		const saved = savedTabsFrom(state);
 		if (saved && !this.ready) this.saved = saved;
-		else if (saved) for (const tab of saved.tabs) if (!this.plugin.holderOf(tab.sessionFile) && existsSync(tab.sessionFile)) this.addTab(tab, false);
+		else if (saved) for (const tab of saved.tabs) if (this.plugin.canRestoreTab(tab.sessionFile)) this.addTab(tab, false);
 		await super.setState(state, result);
 	}
 
@@ -90,7 +85,7 @@ export class ChatView extends ItemView {
 	// Before the panel has opened its own tabs they wait here, where the state Obsidian is about to apply can't overwrite them.
 	adoptTabs(tabs: SavedTab[]): void {
 		if (!this.ready) return void this.adopted.push(...tabs);
-		for (const tab of tabs) if (existsSync(tab.sessionFile) && !this.plugin.holderOf(tab.sessionFile)) this.addTab(tab, false);
+		for (const tab of tabs) if (this.plugin.canRestoreTab(tab.sessionFile)) this.addTab(tab, false);
 		this.app.workspace.requestSaveLayout();
 	}
 
@@ -151,9 +146,8 @@ export class ChatView extends ItemView {
 					.onClick(() => (linked ? void tab.unlinkFrom(note) : tab.linkToNote(note))),
 			);
 		}
-		const advisor = readAdvisorConfig().modelKey;
+		const advisor = this.plugin.cachedAdvisorModel;
 		menu.addItem((i) => i.setTitle(advisor ? `Advisor: ${advisor}…` : "Set advisor model…").setIcon("graduation-cap").onClick(() => void tab.configureAdvisor()));
-		if (this.plugin.settings.a2aDiscussions) menu.addItem((i) => i.setTitle("Start A2A discussion…").setIcon("swords").onClick(() => tab.insertText("/a2a ")));
 		menu.addItem((i) => i.setTitle("Compact context").setIcon("fold-vertical").onClick(() => void tab.compact()));
 		menu.addItem((i) => i.setTitle("Export conversation to a note").setIcon("file-output").onClick(() => void tab.exportToNote()));
 		menu.addSeparator();
@@ -210,6 +204,7 @@ export class ChatView extends ItemView {
 
 		this.drawer = new SessionsDrawer(root, {
 			sessionDirs: () => this.plugin.sessionDirectories(),
+			loadSessions: () => this.plugin.loadSessionList(),
 			currentSessionFile: () => this.active?.heldSessionFile ?? null,
 			sessionsOpenElsewhere: () => new Set(this.plugin.heldSessionFiles(this.active)),
 			openSession: (session) => void this.openSession(session.path),
@@ -250,9 +245,13 @@ export class ChatView extends ItemView {
 		const own = !resumeLastSession ? [] : this.saved ? this.saved.tabs : lastSessionFile ? [{ sessionFile: lastSessionFile, title: "" }] : [];
 		const wanted = [...own, ...this.adopted.splice(0), ...this.plugin.takePendingTabs()];
 		// Each session file gets one pi, whichever panel asks first.
-		for (const tab of wanted) if (existsSync(tab.sessionFile) && !this.plugin.holderOf(tab.sessionFile)) this.addTab(tab, false);
+		for (const tab of wanted) if (this.plugin.canRestoreTab(tab.sessionFile)) this.addTab(tab, false);
 		const lastActive = this.saved?.tabs[this.saved.active]?.sessionFile;
 		this.activate(this.tabs.find((tab) => tab.heldSessionFile === lastActive) ?? this.tabs[0] ?? this.addTab({ sessionFile: null }, false));
+	}
+
+	refreshSessions(): void {
+		void this.drawer?.refresh();
 	}
 
 	// The tab on screen. Commands can arrive before the panel has opened its tabs.
@@ -344,7 +343,7 @@ export class ChatView extends ItemView {
 		// Two pi processes appending to one session file would corrupt it; go to the tab that has it.
 		const holder = this.plugin.holderOf(path);
 		if (holder) return holder.view.revealTab(holder.tab);
-		if (!existsSync(path)) {
+		if (!(await this.plugin.sessionExists(path))) {
 			new Notice("That session file no longer exists.");
 			return void this.drawer.refresh();
 		}
@@ -390,7 +389,7 @@ export class ChatView extends ItemView {
 			const holder = this.plugin.holderOf(session.path);
 			if (holder) await holder.view.closeTab(holder.tab);
 			if (this.plugin.holderOf(session.path)) return; // the user chose to keep a busy tab open
-			await shell.trashItem(session.path);
+			await this.plugin.trashSessionFile(session.path);
 			if (this.plugin.settings.lastSessionFile === session.path) {
 				this.plugin.settings.lastSessionFile = this.active?.heldSessionFile ?? "";
 				await this.plugin.saveSettings();

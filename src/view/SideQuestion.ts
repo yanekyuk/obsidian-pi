@@ -24,6 +24,7 @@ const MAX_PRIOR_TURNS = 4;
 
 export interface SideQuestionHost {
 	piCommand(): Promise<{ binary: string; env: NodeJS.ProcessEnv; cwd: string }>;
+	remoteBtwUrl?(): string | null;
 	sessionFile(): string | null;
 	model(): { provider: string; id: string } | null;
 	thinkingLevel(): string | null;
@@ -32,6 +33,7 @@ export interface SideQuestionHost {
 export class SideQuestions {
 	private el: HTMLElement;
 	private proc: ChildProcess | null = null;
+	private ws: WebSocket | null = null;
 	private turns: { question: string; answer: string }[] = [];
 	private runId = 0;
 
@@ -53,6 +55,8 @@ export class SideQuestions {
 		this.runId++;
 		this.proc?.kill();
 		this.proc = null;
+		this.ws?.close();
+		this.ws = null;
 		this.el.empty();
 	}
 
@@ -74,6 +78,79 @@ export class SideQuestions {
 		const answer = new MarkdownBlock(this.render, answerEl);
 		this.render.onContentChanged();
 
+		let text = "";
+		let failure = "";
+		let stderr = "";
+		const onLine = (line: string) => {
+			let event: {
+				type?: string;
+				failure?: string;
+				stderr?: string;
+				assistantMessageEvent?: { type?: string; delta?: string };
+				message?: { role?: string; stopReason?: string; errorMessage?: string };
+			};
+			try {
+				event = JSON.parse(line);
+			} catch {
+				return;
+			}
+			if (id !== this.runId) return;
+			if (event.type === "pi_workbench_btw_end") {
+				if (event.failure) failure = event.failure;
+				if (event.stderr) stderr = event.stderr;
+				return;
+			}
+			if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
+				status.remove();
+				text += event.assistantMessageEvent.delta ?? "";
+				answer.append(event.assistantMessageEvent.delta ?? "");
+			} else if (event.type === "message_end" && event.message?.role === "assistant" && event.message.stopReason === "error") {
+				failure = event.message.errorMessage ?? "The model returned an error.";
+			}
+		};
+		const finish = () => {
+			if (id !== this.runId) return;
+			this.proc = null;
+			this.ws = null;
+			status.remove();
+			if (text.trim()) {
+				this.turns.push({ question, answer: text.trim() });
+				this.turns = this.turns.slice(-MAX_PRIOR_TURNS);
+			} else {
+				answerEl.createDiv({ cls: "pi-msg-notice is-error", text: failure || stderr.trim().split("\n").slice(-4).join("\n") || "pi gave no answer." });
+			}
+			this.render.onContentChanged();
+		};
+
+		const remoteUrl = this.host.remoteBtwUrl?.() ?? null;
+		if (remoteUrl) {
+			try {
+				const ws = new WebSocket(remoteUrl);
+				this.ws = ws;
+				ws.addEventListener("open", () => {
+					ws.send(JSON.stringify({
+						sessionFile: this.host.sessionFile(),
+						model: this.host.model(),
+						thinkingLevel: this.host.thinkingLevel(),
+						prompt: this.promptFor(question),
+						systemPrompt: SYSTEM_PROMPT,
+					}));
+				});
+				ws.addEventListener("message", (evt) => {
+					const raw = typeof evt.data === "string" ? evt.data : String(evt.data ?? "");
+					for (const line of raw.split("\n")) if (line.trim()) onLine(line);
+				});
+				ws.addEventListener("error", () => {
+					if (!failure) failure = "Could not connect to the remote pi server.";
+				});
+				ws.addEventListener("close", () => finish());
+			} catch (err) {
+				failure = (err as Error).message;
+				finish();
+			}
+			return;
+		}
+
 		const workDir = await fs.mkdtemp(join(tmpdir(), "pi-workbench-btw-"));
 		const cleanup = () => void fs.rm(workDir, { recursive: true, force: true });
 		if (id !== this.runId) return cleanup();
@@ -93,27 +170,8 @@ export class SideQuestions {
 
 		const proc = spawn(binary, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
 		this.proc = proc;
-		let text = "";
-		let failure = "";
-		let stderr = "";
 		const decoder = new StringDecoder("utf8");
 		let buffer = "";
-		const onLine = (line: string) => {
-			let event: { type?: string; assistantMessageEvent?: { type?: string; delta?: string }; message?: { role?: string; stopReason?: string; errorMessage?: string } };
-			try {
-				event = JSON.parse(line);
-			} catch {
-				return;
-			}
-			if (id !== this.runId) return;
-			if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
-				status.remove();
-				text += event.assistantMessageEvent.delta ?? "";
-				answer.append(event.assistantMessageEvent.delta ?? "");
-			} else if (event.type === "message_end" && event.message?.role === "assistant" && event.message.stopReason === "error") {
-				failure = event.message.errorMessage ?? "The model returned an error.";
-			}
-		};
 		proc.stdout?.on("data", (chunk: Buffer) => {
 			buffer += decoder.write(chunk);
 			let newline: number;
@@ -126,16 +184,7 @@ export class SideQuestions {
 		proc.on("error", (err) => (failure = err.message));
 		proc.on("close", () => {
 			cleanup();
-			if (id !== this.runId) return;
-			this.proc = null;
-			status.remove();
-			if (text.trim()) {
-				this.turns.push({ question, answer: text.trim() });
-				this.turns = this.turns.slice(-MAX_PRIOR_TURNS);
-			} else {
-				answerEl.createDiv({ cls: "pi-msg-notice is-error", text: failure || stderr.trim().split("\n").slice(-4).join("\n") || "pi gave no answer." });
-			}
-			this.render.onContentChanged();
+			finish();
 		});
 	}
 

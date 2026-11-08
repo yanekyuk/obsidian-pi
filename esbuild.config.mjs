@@ -1,7 +1,7 @@
 import esbuild from "esbuild";
-import builtins from "builtin-modules";
 
 import { bundledFiles } from "./scripts/bundled-files.mjs";
+import { mobileShims } from "./scripts/mobile-shims.mjs";
 
 const prod = process.argv[2] === "production";
 
@@ -10,7 +10,6 @@ const context = await esbuild.context({
 	bundle: true,
 	external: [
 		"obsidian",
-		"electron",
 		"@codemirror/autocomplete",
 		"@codemirror/collab",
 		"@codemirror/commands",
@@ -22,8 +21,6 @@ const context = await esbuild.context({
 		"@lezer/common",
 		"@lezer/highlight",
 		"@lezer/lr",
-		...builtins,
-		...builtins.map((m) => `node:${m}`),
 	],
 	format: "cjs",
 	target: "es2020",
@@ -32,7 +29,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	minify: prod,
 	outfile: "main.js",
-	plugins: [bundledFiles],
+	plugins: [bundledFiles, mobileShims],
 });
 
 if (prod) {

@@ -1,15 +1,10 @@
 import { Component, Keymap, Menu, Notice, TFile, setIcon, type App, type Events, type ItemView } from "obsidian";
-import { existsSync } from "fs";
 import { homedir } from "os";
 import { basename, relative, resolve } from "path";
-import { A2A_CHANNEL, type Proposal } from "../../pi-extension/a2a/discussion";
-import { lineupCard } from "../a2a/LineupCard";
-import { suggestLineup } from "../a2a/lineup";
-import { readAdvisorConfig, writeAdvisorConfig } from "../advisor";
 import { BROWSER_CHANNEL } from "../browser";
 import { OBSIDIAN_CHANNEL } from "../obsidianControl";
 import type PiAgentPlugin from "../main";
-import { hasLegacyMcpCommand, probeMcp, unusableMcpServers, vaultMcpServers } from "../mcp";
+import { hasLegacyMcpCommand, probeMcp, vaultMcpServers } from "../mcp";
 import { readActiveContext, rewordMessage, splitContext, withContext } from "../prompt";
 import { findRequired, manualInstallCommands, OBSIDIAN_SKILLS, SKILLS_PACKAGE } from "../requirements";
 import { PiRpcClient } from "../rpc/PiRpcClient";
@@ -19,7 +14,7 @@ import { AttachmentTray, imageFilesOf, imageSrc } from "./Attachments";
 import { MarkdownBlock, ThinkingBlock, ToolCard, ToolGroup, formatActivityText, rerenderMarkdownIn, type RenderHost } from "./blocks";
 import { ComposerSuggest } from "./ComposerSuggest";
 import { InlineDialogs, type DialogForm } from "./InlineDialogs";
-import { readEnabledModels, scopeModels } from "../models";
+import { scopeModels } from "../models";
 import { renderInline } from "./markdown";
 import { ModelPicker, pickOne, promptText } from "./modals";
 import { SideQuestions } from "./SideQuestion";
@@ -27,7 +22,7 @@ import { TodoPanel, tasksFrom } from "./TodoPanel";
 import { appendToNote, createNote, createNoteFrom, insertIntoNote, markdownOf } from "./writeBack";
 import { transcriptMarkdown } from "../exportNote";
 import { linkedSession, writeLink } from "../noteLink";
-import { EDITING_TOOLS, snapshotAfter, snapshotBefore, swapVersion, unchangedSince, type FileSnapshot } from "./revert";
+import { EDITING_TOOLS, type FileSnapshot } from "./revert";
 import { activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, editInPlace, entryIdOf, TREE_COMMAND, type ActiveBranch } from "./editMessage";
 
 const STICK_TO_BOTTOM_PX = 48;
@@ -47,9 +42,6 @@ const compactTokens = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : S
 
 // Extension status and widget text is written for a terminal.
 const stripAnsi = (text: string) => text.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "");
-
-// Electron is external to the bundle and has no types here. openPath resolves to an error message, or "".
-const { shell } = require("electron") as { shell: { openPath(path: string): Promise<string> } };
 
 type Block = MarkdownBlock | ThinkingBlock | ToolCard | ToolGroup;
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -127,7 +119,7 @@ export class ChatSession {
 	private toolCards = new Map<string, ToolCard>();
 	private currentToolGroup: ToolGroup | null = null;
 	// Files as they were before pi's edit and write tools touched them, by tool call.
-	private snapshots = new Map<string, FileSnapshot>();
+	private snapshots = new Map<string, Promise<FileSnapshot | undefined>>();
 	private widgets = new Map<string, { lines: string[]; below: boolean }>();
 	private held: HeldMessage[] = [];
 	private flushing = false;
@@ -335,6 +327,7 @@ export class ChatSession {
 		this.widgetsAboveEl = dock.createDiv({ cls: "pi-widgets" });
 		this.side = new SideQuestions(dock, this.renderHost, {
 			piCommand: () => this.plugin.piCommand(),
+			remoteBtwUrl: () => this.plugin.remoteBtwUrl(),
 			sessionFile: () => this.heldSessionFile,
 			model: () => this.state?.model ?? null,
 			thinkingLevel: () => (this.state?.model?.reasoning ? (this.state.thinkingLevel ?? null) : null),
@@ -535,7 +528,7 @@ export class ChatSession {
 	// so /mcp reads "disconnected (0 tools)" until something uses one. In Obsidian the vault's
 	// own server is the point, so connect the ones that are up as soon as pi has started.
 	private async connectMcp(): Promise<void> {
-		if (!this.plugin.settings.connectMcpOnStart || !hasLegacyMcpCommand(this.suggest.commands)) return;
+		if (this.plugin.isRemote || !this.plugin.settings.connectMcpOnStart || !hasLegacyMcpCommand(this.suggest.commands)) return;
 		for (const server of await vaultMcpServers(this.plugin.vaultPath)) {
 			// A name with a space can't be passed to the command; a server that is down gets the warning instead.
 			if (/\s/.test(server.name) || (await probeMcp(server.url)) !== null || !this.client.running) continue;
@@ -552,7 +545,7 @@ export class ChatSession {
 	// are guidance, not a startup failure: Pi keeps running with fewer panel integrations.
 	private async showMissingPrerequisites(): Promise<void> {
 		this.prerequisitesEl.empty();
-		const installed = await this.plugin.requirements.installed().catch(() => null);
+		const installed = await this.plugin.installedPackages().catch(() => null);
 		if (!installed) return;
 
 		const missingPackages = [...findRequired(installed)].filter(([, pkg]) => pkg === null).map(([name]) => name);
@@ -592,7 +585,7 @@ export class ChatSession {
 	private async checkMcp(force = false): Promise<void> {
 		if (!force && Date.now() - this.mcpCheckedAt < MCP_RECHECK_MS) return;
 		this.mcpCheckedAt = Date.now();
-		const down = await unusableMcpServers(this.plugin.vaultPath);
+		const down = await this.plugin.unusableMcp();
 		this.mcpWarningEl.empty();
 		this.mcpWarningEl.toggle(down.length > 0);
 		if (!down.length) return;
@@ -629,6 +622,16 @@ export class ChatSession {
 		this.connecting = true;
 		this.failed = false;
 		this.bannerEl.hide();
+		if (this.plugin.isRemote && !this.plugin.remoteClient.configured) {
+			this.connecting = false;
+			this.failed = true;
+			this.showBanner(
+				"Remote pi server is not configured",
+				"Turn on 'Host server for Obsidian Mobile' in desktop Obsidian, then enter the server URL and access token in Settings → Pi Workbench.",
+				{ label: "Open settings", run: () => this.plugin.openSettings() },
+			);
+			return;
+		}
 		this.setActivity("Starting pi…");
 		try {
 			await this.client.start(await this.plugin.buildSpawnOptions(session ?? this.resumeTarget()));
@@ -636,6 +639,7 @@ export class ChatSession {
 			const fromPi = (await this.client.getCommands()).filter((c) => c.name !== TREE_COMMAND);
 			this.suggest.commands = [...PANEL_COMMANDS.filter((c) => !fromPi.some((p) => p.name === c.name)), ...fromPi];
 			this.renderEmptyState();
+			void this.plugin.refreshAdvisorModel();
 			void this.checkMcp(true);
 			void this.connectMcp();
 			void this.showMissingPrerequisites();
@@ -674,7 +678,7 @@ export class ChatSession {
 		// A tab resumes its own session or nothing: if that file is gone (pi only writes a
 		// session once it has messages), it must not grab another tab's.
 		const candidate = this.heldSessionFile;
-		const usable = candidate && existsSync(candidate) && !this.plugin.holderOf(candidate, this) ? candidate : null;
+		const usable = candidate && this.plugin.canRestoreTab(candidate) && !this.plugin.holderOf(candidate, this) ? candidate : null;
 		// Claim it synchronously, so a second tab starting at the same moment sees it as taken.
 		this.sessionFile = usable;
 		return usable;
@@ -883,7 +887,7 @@ export class ChatSession {
 			{ label: "No advisor", key: null, reasoning: false },
 			...models.map((m) => ({ label: `${m.provider}/${m.id}`, key: `${m.provider}/${m.id}`, reasoning: Boolean(m.reasoning) })),
 		];
-		const current = readAdvisorConfig().modelKey;
+		const current = await this.plugin.refreshAdvisorModel();
 		const picked = await pickOne(this.app, choices, (c) => (c.key === current ? `${c.label}  (current)` : c.label), "Advisor model…");
 		if (!picked) return;
 		let effort: string | null = null;
@@ -893,7 +897,7 @@ export class ChatSession {
 			effort = chosen && chosen !== "model default" ? chosen : null;
 		}
 		try {
-			writeAdvisorConfig(picked.key, effort);
+			await this.plugin.setAdvisorModel(picked.key, effort);
 		} catch (err) {
 			new Notice(`Couldn't save the advisor setting: ${(err as Error).message}`);
 			return;
@@ -1150,7 +1154,7 @@ export class ChatSession {
 	private async pickModel(): Promise<void> {
 		if (!this.client.running) return;
 		const models = await this.client.getAvailableModels();
-		const scoped = scopeModels(await readEnabledModels(this.plugin.panelSettingsFile), models);
+		const scoped = scopeModels(await this.plugin.readEnabledModelPatterns(), models);
 		new ModelPicker(
 			this.app,
 			models,
@@ -1283,8 +1287,7 @@ export class ChatSession {
 				this.cardFor(e.toolCallId, e.toolName, e.args).setStatus("running");
 				this.setActivity(formatActivityText(e.toolName, e.args));
 				if (EDITING_TOOLS.has(e.toolName) && typeof e.args?.path === "string") {
-					const snapshot = snapshotBefore(this.absolutePath(e.args.path));
-					if (snapshot) this.snapshots.set(e.toolCallId, snapshot);
+					this.snapshots.set(e.toolCallId, this.plugin.snapshotBeforeEdit(this.absolutePath(e.args.path)));
 				}
 				break;
 			case "tool_execution_update":
@@ -1296,7 +1299,7 @@ export class ChatSession {
 				if (e.toolName === "todo" && !e.isError) this.todos.set(tasksFrom(e.result?.details) ?? null);
 				card.setResult(e.result, e.isError);
 				card.setStatus(e.isError ? "error" : "done");
-				this.offerRevert(e.toolCallId, e.toolName, e.isError);
+				void this.offerRevert(e.toolCallId, e.toolName, e.isError);
 				this.setActivity(`Processing ${e.toolName} result…`);
 				this.keepScrolled();
 				break;
@@ -1404,10 +1407,6 @@ export class ChatSession {
 			});
 			return;
 		}
-		if (req.method === "input" && req.title === A2A_CHANNEL) {
-			void this.proposeDiscussion(req);
-			return;
-		}
 		switch (req.method) {
 			case "select":
 			case "confirm":
@@ -1441,31 +1440,6 @@ export class ChatSession {
 		// The question sits in this tab; say so if the user is looking somewhere else.
 		if (!this.host.isShowing(this)) this.callOver(`pi has a question for you in "${this.title}".`);
 		else if (!this.el.contains(this.el.ownerDocument.activeElement)) this.callOver("pi has a question for you.");
-	}
-
-	// pi's a2a_discussion tool asks for a lineup (see pi-extension/a2a). The card suggests a model
-	// per role; the user changes what they like, then starts the discussion or declines it.
-	private async proposeDiscussion(req: ExtensionUiRequest): Promise<void> {
-		try {
-			const proposal = JSON.parse(req.placeholder ?? "{}") as Proposal;
-			const available = await this.client.getAvailableModels();
-			const scoped = scopeModels(await readEnabledModels(this.plugin.panelSettingsFile), available);
-			const lineup = suggestLineup({ available, scoped: scoped.models, current: this.state?.model ?? null, advisor: readAdvisorConfig().modelKey });
-			const settings = this.plugin.settings;
-			const form = lineupCard(this.app, proposal, lineup, {
-				available,
-				scoped,
-				showAll: settings.showAllModels,
-				onShowAllChange: (showAll) => {
-					settings.showAllModels = showAll;
-					void this.plugin.saveSettings();
-				},
-			});
-			this.askUser({ ...req, form });
-		} catch (err) {
-			// pi is waiting on the answer, so it gets one either way.
-			if (this.client.running) this.client.respondToUi(req.id, { value: JSON.stringify({ error: (err as Error).message }) });
-		}
 	}
 
 	// ---------------------------------------------------------------- transcript
@@ -1821,11 +1795,8 @@ export class ChatSession {
 			card = new ToolCard(group.cardContainer, this.renderHost, name, this.plugin.settings.expandTools, {
 				open: (p, newLeaf) => this.openVaultPath(p, newLeaf),
 				absolute: (p) => this.absolutePath(p),
-				openExternally: async (p) => {
-					const file = this.absolutePath(p);
-					if (!existsSync(file)) return "it is no longer there";
-					return (await shell.openPath(file)) || null;
-				},
+				openExternally: (p) => this.plugin.openExternalFile(this.absolutePath(p)),
+				readImage: (p) => this.plugin.readImageBytes(p),
 			});
 			const thinking = this.live
 				? Array.from(this.live.blocks.values()).find(
@@ -1850,22 +1821,24 @@ export class ChatSession {
 	}
 
 	// Once an edit is in, the card can take it back, as long as the file hasn't moved on since.
-	private offerRevert(id: string, toolName: string, isError: boolean): void {
-		const taken = this.snapshots.get(id);
+	private async offerRevert(id: string, toolName: string, isError: boolean): Promise<void> {
+		const pending = this.snapshots.get(id);
 		this.snapshots.delete(id);
-		if (!taken || isError) return;
+		if (!pending || isError) return;
+		const taken = await pending;
+		if (!taken) return;
 		const card = this.toolCards.get(id);
 		const args = (card?.arguments ?? {}) as Record<string, unknown>;
-		let snapshot = snapshotAfter(taken, toolName, args);
+		let snapshot = await this.plugin.snapshotAfterEdit(taken, toolName, args);
 		if (!snapshot || !card) return;
 		const swap = async () => {
-			if (!unchangedSince(snapshot as FileSnapshot)) {
+			if (!(await this.plugin.isSnapshotUnchanged(snapshot as FileSnapshot))) {
 				new Notice("The file has changed since this edit, so it is left as it is.");
 				card.setRevert(null);
 				return;
 			}
 			try {
-				snapshot = await swapVersion(this.app, this.plugin.vaultPath, snapshot as FileSnapshot);
+				snapshot = await this.plugin.swapSnapshotVersion(snapshot as FileSnapshot);
 			} catch (err) {
 				new Notice(`Couldn't change the file: ${(err as Error).message}`);
 				return;
@@ -1877,7 +1850,8 @@ export class ChatSession {
 	}
 
 	private absolutePath(path: string): string {
-		return resolve(this.plugin.vaultPath, path.replace(/^~(?=$|\/)/, homedir()));
+		const home = homedir() || "/";
+		return resolve(this.plugin.vaultPath, path.replace(/^~(?=$|\/)/, home));
 	}
 
 	private openVaultPath(path: string, newLeaf: boolean): boolean {

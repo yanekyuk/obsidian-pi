@@ -1,10 +1,11 @@
-import { FileSystemAdapter, Notice, Plugin, TFile, addIcon, type Editor } from "obsidian";
+import { FileSystemAdapter, Notice, Platform, Plugin, TFile, addIcon, type Editor } from "obsidian";
 import { existsSync, promises as fs } from "fs";
 import { homedir } from "os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "path";
+import { readAdvisorConfig, writeAdvisorConfig } from "./advisor";
 import { DEFAULT_INHERITANCE, HARNESS_AGENT_DIR, USER_AGENT_DIR, prepareAgentDir, sessionDirFor } from "./agentDir";
 import { loadsAllSkills, readPackageEntries, sourceOf } from "./packages";
-import { MCP_ADAPTER, Requirements } from "./requirements";
+import { MCP_ADAPTER, Requirements, type InstalledPackage } from "./requirements";
 import { BrowserControl } from "./browser";
 import { ObsidianControl } from "./obsidianControl";
 import { VaultSearch } from "./search/VaultSearch";
@@ -12,15 +13,24 @@ import { extractBundledFiles } from "./bundled";
 import { StatusBar } from "./statusBar";
 import { linkedSession, resolveLinked, sessionDirs } from "./noteLink";
 import { resolveEnv } from "./env";
+import { unusableMcpServers } from "./mcp";
+import { readEnabledModels } from "./models";
 import { sharedPiEnvironment } from "./piEnvironment";
 import { buildSystemPrompt } from "./prompt";
+import { PiRemoteClient } from "./remote/client";
+import { PiRemoteServer, type RemoteSessionOverrides } from "./remote/server";
+import { DEFAULT_SERVER_PORT, generateServerToken } from "./remote/ws";
 import type { PiSpawnOptions } from "./rpc/PiRpcClient";
+import { listSessions, type SessionSummary } from "./sessions";
 import { DEFAULT_SETTINGS, PiAgentSettingTab, type PiAgentSettings } from "./settings";
 import type { ChatSession } from "./view/ChatSession";
 import { ChatView, VIEW_TYPE_PI } from "./view/ChatView";
+import { snapshotAfter, snapshotBefore, swapVersion, unchangedSince, type FileSnapshot } from "./view/revert";
 import { panelsIn, type SavedTab } from "./view/savedTabs";
 
 const MAX_SESSIONS_WITH_HIDDEN_TODOS = 30;
+const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
+const { shell } = require("electron") as { shell: { trashItem(path: string): Promise<void>; openPath(path: string): Promise<string> } };
 // Panels saved under the names this plugin had before, with the id of the plugin that may own each name now.
 const LEGACY_PANELS = [
 	{ viewType: "pi-agent-chat", plugin: "pi-agent" }, // before it was published
@@ -36,11 +46,22 @@ export default class PiAgentPlugin extends Plugin {
 	statusBar!: StatusBar;
 
 	requirements = new Requirements({ piCommand: () => this.piCommand() });
+	remoteClient = new PiRemoteClient(() => ({ url: this.settings.remoteUrl, token: this.settings.remoteToken }));
+	remoteServer: PiRemoteServer | null = null;
+	cachedAdvisorModel: string | undefined = undefined;
+
+	get hasLocalFs(): boolean {
+		return !Platform.isMobile && this.app.vault.adapter instanceof FileSystemAdapter;
+	}
+
+	get isRemote(): boolean {
+		return !this.hasLocalFs || Boolean(this.settings.remoteUrl.trim());
+	}
 
 	get vaultPath(): string {
 		const adapter = this.app.vault.adapter;
-		if (!(adapter instanceof FileSystemAdapter)) throw new Error("Pi Workbench needs a vault on the local file system.");
-		return adapter.getBasePath();
+		if (adapter instanceof FileSystemAdapter) return adapter.getBasePath();
+		return this.remoteClient.vaultPath || "/";
 	}
 
 	async onload(): Promise<void> {
@@ -48,9 +69,15 @@ export default class PiAgentPlugin extends Plugin {
 		const currentSettings = Object.fromEntries(Object.keys(DEFAULT_SETTINGS).filter((key) => key in loaded).map((key) => [key, loaded[key]])) as Partial<PiAgentSettings>;
 		this.settings = { ...DEFAULT_SETTINGS, ...currentSettings, inherit: { ...DEFAULT_INHERITANCE, ...currentSettings.inherit } };
 		addIcon("pi", PI_ICON);
-		void resolveEnv(); // warm the shell PATH lookup before the first spawn
-		// Before any chat starts pi, whose PATH includes the launcher.
-		if (this.manifest.dir) await extractBundledFiles(join(this.vaultPath, this.manifest.dir)).catch((err) => console.warn("[pi-workbench] couldn't write the bundled launcher", err));
+		if (this.hasLocalFs) {
+			void resolveEnv(); // warm the shell PATH lookup before the first spawn
+			// Before any chat starts pi, whose PATH includes the launcher.
+			if (this.manifest.dir) await extractBundledFiles(join(this.vaultPath, this.manifest.dir)).catch((err) => console.warn("[pi-workbench] couldn't write the bundled launcher", err));
+			this.cachedAdvisorModel = readAdvisorConfig().modelKey;
+			await this.syncRemoteServer();
+		} else if (this.remoteClient.configured) {
+			void this.refreshAdvisorModel();
+		}
 
 		this.addChild(this.vaultSearch);
 		this.registerView(VIEW_TYPE_PI, (leaf) => new ChatView(leaf, this));
@@ -124,6 +151,153 @@ export default class PiAgentPlugin extends Plugin {
 		});
 	}
 
+
+	onunload(): void {
+		void this.remoteServer?.stop();
+		this.remoteServer = null;
+	}
+
+	async syncRemoteServer(): Promise<void> {
+		if (!this.hasLocalFs) return;
+		if (!this.settings.serverEnabled) {
+			await this.remoteServer?.stop();
+			this.remoteServer = null;
+			return;
+		}
+		if (!this.settings.serverToken) {
+			this.settings.serverToken = generateServerToken();
+			await this.saveSettings();
+		}
+		if (!this.remoteServer) {
+			this.remoteServer = new PiRemoteServer({
+				vaultName: () => this.app.vault.getName(),
+				vaultPath: () => this.vaultPath,
+				panelSettingsFile: () => this.panelSettingsFile,
+				sessionDirectories: () => this.sessionDirectories(),
+				lastSessionFile: () => this.settings.lastSessionFile,
+				heldSessionFiles: () => this.heldSessionFiles(),
+				isSessionHeld: (file) => this.isSessionHeld(file),
+				buildSpawnOptions: (file, overrides) => this.buildLocalSpawnOptions(file, overrides),
+				piCommand: () => this.piCommand(),
+				installedPackages: () => this.requirements.installed(),
+				trashSession: (path) => shell.trashItem(path),
+				swapVersion: (snap) => swapVersion(this.app, this.vaultPath, snap),
+				onSessionsChanged: () => this.chatViews().forEach((v) => v.refreshSessions()),
+			});
+		}
+		try {
+			await this.remoteServer.start({
+				port: this.settings.serverPort || DEFAULT_SERVER_PORT,
+				bindHost: this.settings.serverBindHost || "0.0.0.0",
+				token: this.settings.serverToken,
+			});
+		} catch (err) {
+			new Notice(`Couldn't start the Pi Workbench mobile server: ${(err as Error).message}`);
+		}
+	}
+
+	async refreshAdvisorModel(): Promise<string | undefined> {
+		try {
+			const cfg = this.isRemote ? await this.remoteClient.readAdvisorConfig() : readAdvisorConfig();
+			this.cachedAdvisorModel = cfg.modelKey;
+		} catch {
+			// Ignore when disconnected
+		}
+		return this.cachedAdvisorModel;
+	}
+
+	async setAdvisorModel(modelKey: string | null, effort: string | null): Promise<void> {
+		if (this.isRemote) await this.remoteClient.writeAdvisorConfig(modelKey, effort);
+		else writeAdvisorConfig(modelKey, effort);
+		this.cachedAdvisorModel = modelKey ?? undefined;
+	}
+
+	async readEnabledModelPatterns(): Promise<string[]> {
+		if (this.isRemote) return this.remoteClient.readEnabledModels().catch(() => []);
+		return readEnabledModels(this.panelSettingsFile);
+	}
+
+	async installedPackages(): Promise<InstalledPackage[]> {
+		if (this.isRemote) return this.remoteClient.installedPackages();
+		return this.requirements.installed();
+	}
+
+	async unusableMcp(): Promise<{ name: string; url: string; reason: string }[]> {
+		if (this.isRemote) return this.remoteClient.unusableMcpServers().catch(() => []);
+		return unusableMcpServers(this.vaultPath);
+	}
+
+	async loadSessionList(): Promise<{ sessions: SessionSummary[]; openElsewhere: Set<string> }> {
+		if (this.isRemote) {
+			const res = await this.remoteClient.listSessions();
+			return { sessions: res.sessions, openElsewhere: new Set(res.heldSessionFiles) };
+		}
+		return { sessions: await listSessions(this.sessionDirectories()), openElsewhere: new Set() };
+	}
+
+	canRestoreTab(sessionFile: string): boolean {
+		if (!sessionFile || this.isSessionHeld(sessionFile)) return false;
+		return this.isRemote ? true : existsSync(sessionFile);
+	}
+
+	async sessionExists(path: string): Promise<boolean> {
+		if (!path) return false;
+		return this.isRemote ? this.remoteClient.sessionExists(path) : existsSync(path);
+	}
+
+	async resolveLinkedSession(value: string): Promise<string | null> {
+		if (!value) return null;
+		return this.isRemote ? this.remoteClient.resolveLinked(value) : resolveLinked(value, this.sessionDirectories());
+	}
+
+	async trashSessionFile(path: string): Promise<void> {
+		if (this.isRemote) await this.remoteClient.trashSession(path);
+		else await shell.trashItem(path);
+	}
+
+	remoteBtwUrl(): string | null {
+		return this.isRemote ? this.remoteClient.wsUrl("/btw") : null;
+	}
+
+	async readImageBytes(rawPath: string): Promise<Uint8Array> {
+		const abs = resolve(this.vaultPath, rawPath.replace(/^~(?=$|\/)/, homedir() || "/"));
+		const rel = abs.startsWith(`${this.vaultPath}/`) ? abs.slice(this.vaultPath.length + 1) : rawPath;
+		const vaultFile = this.app.vault.getAbstractFileByPath(rel);
+		if (vaultFile instanceof TFile) {
+			const buf = await this.app.vault.readBinary(vaultFile);
+			if (buf.byteLength > MAX_IMAGE_BYTES) throw new Error("the file is too large to preview");
+			return new Uint8Array(buf);
+		}
+		if (this.isRemote) return this.remoteClient.readImage(rawPath);
+		if ((await fs.stat(abs)).size > MAX_IMAGE_BYTES) throw new Error("the file is too large to preview");
+		return await fs.readFile(abs);
+	}
+
+	async openExternalFile(file: string): Promise<string | null> {
+		if (this.isRemote) return "External files on the server cannot be opened on this device.";
+		if (!existsSync(file)) return "it is no longer there";
+		return (await shell.openPath(file)) || null;
+	}
+
+	snapshotBeforeEdit(absPath: string): Promise<FileSnapshot | undefined> {
+		if (this.isRemote) return this.remoteClient.snapshotBefore(absPath).catch(() => undefined);
+		return Promise.resolve(snapshotBefore(absPath));
+	}
+
+	snapshotAfterEdit(snapshot: FileSnapshot, toolName: string, args: Record<string, unknown>): Promise<FileSnapshot | undefined> {
+		if (this.isRemote) return this.remoteClient.snapshotAfter(snapshot, toolName, args).catch(() => undefined);
+		return Promise.resolve(snapshotAfter(snapshot, toolName, args));
+	}
+
+	isSnapshotUnchanged(snapshot: FileSnapshot): Promise<boolean> {
+		if (this.isRemote) return this.remoteClient.unchangedSince(snapshot).catch(() => false);
+		return Promise.resolve(unchangedSince(snapshot));
+	}
+
+	async swapSnapshotVersion(snapshot: FileSnapshot): Promise<FileSnapshot> {
+		if (this.isRemote) return this.remoteClient.swapVersion(snapshot);
+		return swapVersion(this.app, this.vaultPath, snapshot);
+	}
 
 	hiddenTodosFor(sessionFile: string | null): string[] {
 		return (sessionFile && this.settings.hiddenTodos[sessionFile]) || [];
@@ -216,8 +390,6 @@ export default class PiAgentPlugin extends Plugin {
 		// The Obsidian CLI skill calls `obsidian`. The plugin's launcher goes last on the PATH, so
 		// a command of that name the user already has wins.
 		if (this.manifest.dir) env.PATH = [env.PATH, join(this.vaultPath, this.manifest.dir, "bin")].filter(Boolean).join(delimiter);
-		// For the plugin's pi extensions that run pi themselves: the agents of an A2A discussion.
-		env.PI_HARNESS_PI = this.settings.piPath;
 		if (this.settings.isolate) {
 			env.PI_CODING_AGENT_DIR = await prepareAgentDir(this.vaultPath, this.settings.inherit);
 			// pi's MCP adapter reads global files outside any pi folder. In this mode it reads one
@@ -247,8 +419,15 @@ export default class PiAgentPlugin extends Plugin {
 		return null;
 	}
 
+	isSessionHeld(sessionFile: string, except?: ChatSession): boolean {
+		return Boolean(this.holderOf(sessionFile, except) || this.remoteServer?.isSessionHeld(sessionFile));
+	}
+
 	heldSessionFiles(except?: ChatSession | null): string[] {
-		return this.chatViews().flatMap((view) => view.heldSessionFiles(except));
+		return [
+			...this.chatViews().flatMap((view) => view.heldSessionFiles(except)),
+			...(this.remoteServer?.heldSessionFiles() ?? []),
+		];
 	}
 
 	// A second chat panel, for having two conversations side by side. It starts on a fresh session.
@@ -265,7 +444,7 @@ export default class PiAgentPlugin extends Plugin {
 		const view = await this.activateView();
 		if (!view) return;
 		if (params.session) {
-			const path = resolveLinked(params.session, this.sessionDirectories());
+			const path = await this.resolveLinkedSession(params.session);
 			if (!path) return void new Notice("No such pi session here.");
 			await view.openSession(path);
 		} else if (params.note) {
@@ -302,7 +481,7 @@ export default class PiAgentPlugin extends Plugin {
 		const view = await this.activateView();
 		if (!view) return;
 		const linked = linkedSession(this.app, file);
-		const path = linked ? resolveLinked(linked, this.sessionDirectories()) : null;
+		const path = linked ? await this.resolveLinkedSession(linked).catch(() => null) : null;
 		if (path) return view.openSession(path);
 		if (linked) new Notice("The session linked to this note isn't on this machine, so a new one starts.");
 		view.newTab();
@@ -326,11 +505,33 @@ export default class PiAgentPlugin extends Plugin {
 	}
 
 	async buildSpawnOptions(sessionFile: string | null): Promise<PiSpawnOptions> {
+		if (this.isRemote) {
+			const s = this.settings;
+			return this.remoteClient.buildSpawnOptions(sessionFile, {
+				model: s.model,
+				systemPromptAddendum: s.systemPromptAddendum,
+				extraArgs: s.extraArgs,
+				browserControl: s.browserControl && this.hasLocalFs,
+				obsidianControl: s.obsidianControl,
+				trimToolOutput: s.trimToolOutput,
+			});
+		}
+		return this.buildLocalSpawnOptions(sessionFile);
+	}
+
+	private async buildLocalSpawnOptions(sessionFile: string | null, overrides?: RemoteSessionOverrides): Promise<PiSpawnOptions> {
 		const s = this.settings;
 		const vault = this.vaultPath;
-		const args: string[] = ["--append-system-prompt", buildSystemPrompt(this.app.vault.getName(), s.systemPromptAddendum)];
+		const addendum = overrides?.systemPromptAddendum ?? s.systemPromptAddendum;
+		const model = overrides?.model ?? s.model;
+		const extraArgs = overrides?.extraArgs ?? s.extraArgs;
+		const browserControl = overrides?.browserControl ?? s.browserControl;
+		const obsidianControl = overrides?.obsidianControl ?? s.obsidianControl;
+		const trimToolOutput = overrides?.trimToolOutput ?? s.trimToolOutput;
 
-		if (s.model) args.push("--model", s.model);
+		const args: string[] = ["--append-system-prompt", buildSystemPrompt(this.app.vault.getName(), addendum)];
+
+		if (model) args.push("--model", model);
 		if (sessionFile) args.push("--session", sessionFile);
 
 		const env = await this.piEnv();
@@ -362,13 +563,12 @@ export default class PiAgentPlugin extends Plugin {
 		for (const dir of new Set(skillDirs)) if (existsSync(dir)) args.push("--skill", dir);
 
 		// pi's browser_* tools for Obsidian's web viewer; the file is unpacked next to main.js (see bundled.ts).
-		if (s.browserControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "browser.ts"));
-		if (s.obsidianControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "obsidian.ts"));
-		if (s.trimToolOutput && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "trim-tool-output.ts"));
-		if (s.a2aDiscussions && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "a2a", "index.ts"));
+		if (browserControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "browser.ts"));
+		if (obsidianControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "obsidian.ts"));
+		if (trimToolOutput && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "trim-tool-output.ts"));
 
 		// Naive split is enough for flags; quote-aware parsing isn't worth it here.
-		args.push(...s.extraArgs.split(/\s+/).filter(Boolean));
+		args.push(...extraArgs.split(/\s+/).filter(Boolean));
 
 		return { binary: s.piPath, args, cwd: vault, env };
 	}

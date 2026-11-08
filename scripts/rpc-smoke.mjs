@@ -16,6 +16,7 @@ import { dirname, join, resolve } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { crc32, deflateSync } from "zlib";
 import { bundledFiles } from "./bundled-files.mjs";
+import { mobileShims } from "./mobile-shims.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const work = mkdtempSync(join(tmpdir(), "pi-workbench-smoke-"));
@@ -38,8 +39,6 @@ export { extractBundledFiles } from ${JSON.stringify(join(root, "src/bundled.ts"
 export { USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/agentDir.ts"))};
 export { disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } from ${JSON.stringify(join(root, "src/packages.ts"))};
 export { scopeModels } from ${JSON.stringify(join(root, "src/models.ts"))};
-export { suggestLineup, makerOf, sharedMakers } from ${JSON.stringify(join(root, "src/a2a/lineup.ts"))};
-export { runDiscussion, discussionMarkdown } from ${JSON.stringify(join(root, "pi-extension/a2a/discussion.ts"))};
 export { savedTabsFrom, panelsIn } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};
 export { splitTitle, markdownOf } from ${JSON.stringify(join(root, "src/view/writeBack.ts"))};
 export { commandAllowed } from ${JSON.stringify(join(root, "src/obsidianControl.ts"))};
@@ -50,7 +49,10 @@ export { activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entr
 export { buildSystemPrompt, rewordMessage, withContext } from ${JSON.stringify(join(root, "src/prompt.ts"))};
 export { DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND } from ${JSON.stringify(join(root, "pi-extension/panel-shell.ts"))};
 export { SearchIndex } from ${JSON.stringify(join(root, "src/search/SearchIndex.ts"))};
-export { default as trimToolOutput } from ${JSON.stringify(join(root, "pi-extension/trim-tool-output.ts"))};`,
+export { default as trimToolOutput } from ${JSON.stringify(join(root, "pi-extension/trim-tool-output.ts"))};
+export { PiRemoteServer } from ${JSON.stringify(join(root, "src/remote/server.ts"))};
+export { PiRemoteClient } from ${JSON.stringify(join(root, "src/remote/client.ts"))};
+export { DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } from ${JSON.stringify(join(root, "src/remote/ws.ts"))};`,
 );
 // sessions.ts reaches prompt.ts, which imports the Obsidian API; outside the app a stub will do.
 const obsidianStub = {
@@ -65,7 +67,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, suggestLineup, makerOf, sharedMakers, runDiscussion, discussionMarkdown, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput } =
+const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput, PiRemoteServer, PiRemoteClient, DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -260,61 +262,6 @@ const check = (ok, label, detail = "") => {
 	check(ids(scopeModels(["*sonnet*", "OPENAI-CODEX/*"], available)) === "claude-sonnet-5,claude-sonnet-5-20260301,gpt-5.6-sol,gpt-5.6-luna", "scoped models: globs match the id or provider/id, case-insensitively");
 	check(ids(scopeModels(["sonnet", "sonnet"], available)) === "claude-sonnet-5", "scoped models: a partial name stands for one model, and nothing is listed twice");
 	check(scopeModels([], available).models.length === 0 && scopeModels(["a.b"], [m("x", "aXb")]).models.length === 0, "scoped models: no patterns, no scope; a dot is a dot");
-}
-
-// ---- A2A discussions: the automatic lineup, and the order and memory of a discussion
-{
-	const m = (provider, id) => ({ provider, id, name: id });
-	const [fable, opus, sol, astra, k3, gemini, orClaude, orGrok] = [m("anthropic", "claude-fable-5-1"), m("anthropic", "claude-opus-5"), m("openai-codex", "gpt-5.6-sol"), m("openai-codex", "gpt-6-astra"), m("kimi-coding", "k3"), m("google", "gemini-3.1-pro-preview"), m("openrouter", "~anthropic/claude-opus-latest"), m("openrouter", "~x-ai/grok-latest")];
-	const available = [fable, opus, sol, astra, k3, gemini, orClaude, orGrok];
-	const keys = (l) => ["debaterA", "debaterB", "referee"].map((r) => (l[r] ? `${l[r].provider}/${l[r].id}` : "-")).join(" | ");
-	check([fable, sol, k3, gemini, orClaude, orGrok].map(makerOf).join() === "Anthropic,OpenAI,Moonshot,Google,Anthropic,xAI", "a2a lineup: the maker comes from the model id, so a reseller's Claude is still Anthropic");
-
-	const usual = suggestLineup({ available, scoped: [fable, opus, sol, k3, astra], current: sol, advisor: "openai-codex/gpt-6-astra" });
-	check(keys(usual) === "anthropic/claude-fable-5-1 | kimi-coding/k3 | openai-codex/gpt-6-astra", "a2a lineup: the advisor referees; debaters come from the scoped list, each from another maker", keys(usual));
-	const noAdvisor = suggestLineup({ available, scoped: [opus, orClaude, gemini], current: null, advisor: undefined });
-	check(keys(noAdvisor) === "anthropic/claude-opus-5 | google/gemini-3.1-pro-preview | openai-codex/gpt-5.6-sol", "a2a lineup: without an advisor, a third maker is found among all models", keys(noAdvisor));
-	check(sharedMakers(usual).length === 0, "a2a lineup: three makers, nothing to point out");
-	const twoMakers = suggestLineup({ available: [fable, opus, sol], scoped: [], current: null, advisor: undefined });
-	check(keys(twoMakers) === "anthropic/claude-fable-5-1 | openai-codex/gpt-5.6-sol | anthropic/claude-opus-5" && sharedMakers(twoMakers)[0]?.roles.join() === "debaterA,referee", "a2a lineup: with two makers every role still gets a model, and the shared maker is reported", keys(twoMakers));
-	check(keys(suggestLineup({ available: [], scoped: [], current: null, advisor: "x/y" })) === "- | - | -", "a2a lineup: no models, no lineup");
-
-	const plan = { topic: "Tabs or spaces?", stanceA: "Tabs", stanceB: "Spaces", context: "A Go codebase.", rounds: 2, models: { debaterA: "a/1", debaterB: "b/1", referee: "c/1" } };
-	const asked = [];
-	const speaker = (failAt) => async (request, onProgress) => {
-		asked.push(request);
-		if (asked.length === failAt) throw new Error("rate limited");
-		onProgress({ search: `${request.role} query` });
-		onProgress({ text: "partial" });
-		return request.role === "referee" ? `Checked (${asked.length}). **Weak**: the tabs claim.` : `${request.role} argues (${asked.length}).`;
-	};
-	const updates = [];
-	const done = await runDiscussion(plan, speaker(0), (d) => updates.push(d.turns.length));
-	const order = done.turns.map((t) => `${t.round}${t.role[0]}${t.role.endsWith("A") ? "A" : t.role.endsWith("B") ? "B" : ""}`).join(" ");
-	check(done.status === "done" && order === "1dA 1dB 1r 2dA 2dB 2r", "a2a discussion: each round A argues, B answers, the referee checks", order);
-	check(asked.every((r) => r.model === plan.models[r.role]) && asked[0].systemPrompt.includes("Your stance: Tabs") && asked[1].systemPrompt.includes("Your stance: Spaces"), "a2a discussion: each agent gets its own model and stance");
-	check(asked[2].systemPrompt.includes("do not say who is winning") && !asked[2].prompt.includes("## Assessment") && asked[5].prompt.includes("## Assessment"), "a2a discussion: the referee takes no side, and sums up only in the last round");
-	const debater = asked[0].systemPrompt;
-	check(debater.includes("unconventional") && debater.includes("no hybrid or middle-ground proposal") && debater.includes("Concede a point only when evidence or reasoning forces it") && debater.includes("Don't defend a claim the referee showed to be false"), "a2a discussion: debaters commit to their thesis without softening it, yet concede what is shown false");
-	check(asked[2].systemPrompt.includes("is not a defect") && asked[2].systemPrompt.includes("Point out hedging") && asked[2].systemPrompt.includes("Never propose a compromise") && asked[5].prompt.includes("leave the disagreement standing"), "a2a discussion: the referee judges soundness, not conventionality, and brokers no compromise");
-	check(debater.includes("Cite only pages that your searches returned or that you fetched") && asked[0].prompt.includes("search for evidence, then make your opening argument") && asked[3].prompt.includes("strongest form that survived the checks") && asked[4].prompt.includes("strongest form") && !asked[1].prompt.includes("strongest form"), "a2a discussion: debaters search before arguing, cite only what they found, and close without backing off");
-	check(asked[3].prompt.includes("Checked (3). **Weak**") && asked[3].prompt.includes("A Go codebase.") && !asked[0].prompt.includes("The discussion so far"), "a2a discussion: debaters see the context and the referee's checks from earlier rounds");
-	check(done.turns[0].searches.join() === "debaterA query" && done.turns[0].text === "debaterA argues (1)." && updates.length > 6, "a2a discussion: searches and streamed text are recorded and reported as they come");
-	const markdown = discussionMarkdown(done);
-	check(markdown.startsWith("# A2A discussion: Tabs or spaces?") && markdown.includes("## Round 2 · Referee (c/1)") && !markdown.includes("stopped early"), "a2a discussion: the main agent gets the whole transcript");
-
-	asked.length = 0;
-	const failed = await runDiscussion(plan, speaker(2), () => {});
-	check(failed.status === "failed" && failed.turns.length === 2 && failed.turns[1].error === "rate limited" && discussionMarkdown(failed).includes("Debater B (b/1) failed in round 1: rate limited"), "a2a discussion: a failed turn ends it, keeps what was said and says why");
-	const stop = new AbortController();
-	stop.abort();
-	const stopped = await runDiscussion(plan, speaker(0), () => {}, stop.signal).then(() => "ran", (err) => err.message);
-	check(stopped.includes("stopped"), "a2a discussion: a stopped discussion is an error, not a result", stopped);
-
-	const card = TOOL_RENDERERS.a2a_discussion;
-	const running = { status: "running", plan, turns: [{ round: 2, role: "referee", model: "c/1", status: "speaking", text: "", searches: [] }] };
-	check(card.summary({ topic: "Tabs or spaces?" }) === "Tabs or spaces?" && card.summary({}, { details: running }) === "Tabs or spaces? · round 2 of 2, Referee" && card.summary({ topic: "T" }, { details: { status: "declined", turns: [] } }) === "T · declined", "a2a card: the header follows the discussion");
-	check(card.summary({ topic: "T" }, { content: [{ type: "text", text: "The A2A discussion was stopped." }], details: {} }) === "T" && card.body(null, { details: {} }, null) === false, "a2a card: a stopped discussion, saved with empty details, shows as a plain card instead of breaking the session");
 }
 
 // ---- write-back: a reply becoming a note
@@ -674,6 +621,76 @@ const check = (ok, label, detail = "") => {
 	check(!["ensure", "install", "remove", "update", "installSkills"].some((name) => name in Requirements.prototype), "requirements: package access is inspection-only");
 }
 
+// ---- mobile bundle and remote server (HTTP /api + WebSocket /rpc)
+{
+	const { readFileSync } = await import("fs");
+	const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
+	check(manifest.isDesktopOnly === false, "manifest: isDesktopOnly is false so Obsidian Mobile loads the plugin");
+
+	// Bundle src/main.ts the same way esbuild.config.mjs does, then evaluate it with a mobile-only
+	// require() that provides "obsidian" and throws "Cannot find module" for all Node and Electron modules.
+	const mobileBundle = join(work, "mobile-main.cjs");
+	await esbuild.build({
+		entryPoints: [join(root, "src/main.ts")],
+		bundle: true,
+		external: ["obsidian"],
+		format: "cjs",
+		target: "es2020",
+		outfile: mobileBundle,
+		logLevel: "error",
+		plugins: [bundledFiles, mobileShims],
+	});
+	const mobileCode = readFileSync(mobileBundle, "utf8");
+	const mobileRequire = (id) => {
+		if (id === "obsidian") {
+			return {
+				Platform: { isMobile: true, isDesktop: false },
+				FileSystemAdapter: class {},
+				Plugin: class {
+					constructor(app, manifestObj) {
+						this.app = app;
+						this.manifest = manifestObj;
+					}
+				},
+				ItemView: class {},
+				PluginSettingTab: class {},
+				Modal: class {},
+				FuzzySuggestModal: class {},
+				Component: class {},
+				TFile: class {},
+				Notice: class {},
+				Menu: class {},
+				Setting: class {},
+				MarkdownView: class {},
+				MarkdownRenderer: {},
+				Keymap: {},
+				addIcon: () => {},
+				setIcon: () => {},
+				prepareFuzzySearch: () => () => null,
+				normalizePath: (p) => p,
+				getAllTags: () => [],
+				moment: () => ({ startOf: () => ({ diff: () => 0 }), fromNow: () => "now" }),
+			};
+		}
+		throw new Error(`Cannot find module '${id}'`);
+	};
+	const mobileModule = { exports: {} };
+	new Function("module", "exports", "require", mobileCode)(mobileModule, mobileModule.exports, mobileRequire);
+	const MobilePlugin = mobileModule.exports.default ?? mobileModule.exports;
+	const mobileInstance = new MobilePlugin({ vault: { adapter: {}, getName: () => "MobileVault" }, workspace: {} }, manifest);
+	check(typeof MobilePlugin === "function" && mobileInstance.hasLocalFs === false && mobileInstance.isRemote === true, "mobile bundle: loads without Node or Electron and detects mobile remote mode");
+
+	// URL and token helpers
+	const tok = generateServerToken();
+	check(tok.length === 48 && tokensMatch(tok, tok) && !tokensMatch(tok, "wrong") && !tokensMatch("", ""), "remote auth: token generation and constant-time comparison");
+	check(
+		normalizeHttpUrl("100.64.1.2") === `http://100.64.1.2:${DEFAULT_SERVER_PORT}` &&
+			normalizeHttpUrl("ws://100.64.1.2:4000/") === "http://100.64.1.2:4000" &&
+			normalizeWsUrl("http://100.64.1.2:31415", "/rpc", "abc") === "ws://100.64.1.2:31415/rpc?token=abc",
+		"remote URLs: bare Tailscale IPs, ws:// and http:// normalize cleanly",
+	);
+}
+
 console.log(`inherited PATH: ${process.env.PATH}`);
 const env = await resolveEnv();
 check(env.PATH.split(":").length > (process.env.PATH ?? "").split(":").length || env.PATH.includes("homebrew"), "resolveEnv widened PATH", `${env.PATH.split(":").length} entries`);
@@ -806,6 +823,71 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 	const builtIn = (c) => c.sourceInfo?.source === "builtin" || (c.sourceInfo?.path ?? "").startsWith("<inline:") || c.name === TREE_COMMAND;
 	check(theirs.some((c) => c.name === TREE_COMMAND), "isolated pi: panel-shell registers the internal tree command");
 	check(theirs.filter((c) => (c.source === "extension" || c.source === "skill") && !builtIn(c)).length === 0, "isolated pi: none of the user's extensions or skills are loaded", `${commands.filter((c) => c.source === "extension").length} extension commands in the user's own pi`);
+
+	// Remote server + WebSocket RPC + HTTP /api, as used by Obsidian Mobile over Tailscale
+	const remoteSessionDir = join(work, "remote-sessions");
+	mkdirSync(remoteSessionDir, { recursive: true });
+	const lockedSession = join(remoteSessionDir, "locked.jsonl");
+	writeFileSync(
+		lockedSession,
+		JSON.stringify({ type: "session", version: 3, id: "s1", timestamp: "2026-01-01T00:00:00.000Z", cwd: work }) +
+			"\n" +
+			JSON.stringify({ type: "message", id: "u1", parentId: null, message: { role: "user", content: "Remote session title" } }) +
+			"\n",
+	);
+	const serverToken = generateServerToken();
+	let serverRef = null;
+	const server = new PiRemoteServer({
+		vaultName: () => "TestVault",
+		vaultPath: () => work,
+		panelSettingsFile: () => join(isolatedDir, "settings.json"),
+		sessionDirectories: () => [remoteSessionDir],
+		lastSessionFile: () => lockedSession,
+		heldSessionFiles: () => serverRef?.heldSessionFiles() ?? [],
+		isSessionHeld: (file) => Boolean(serverRef?.isSessionHeld(file)),
+		buildSpawnOptions: async (sessionFile) => ({
+			binary: "pi",
+			args: [
+				"--no-skills",
+				"--session-dir",
+				remoteSessionDir,
+				...(sessionFile ? ["--session", sessionFile] : []),
+			],
+			cwd: work,
+			env: { ...env, PI_CODING_AGENT_DIR: isolatedDir },
+		}),
+		piCommand: async () => ({ binary: "pi", env: { ...env, PI_CODING_AGENT_DIR: isolatedDir }, cwd: work }),
+		installedPackages: async () => [],
+		trashSession: async () => {},
+		swapVersion: async (snap) => snap,
+	});
+	serverRef = server;
+	const port = await server.start({ port: 0, bindHost: "127.0.0.1", token: serverToken });
+	const badClient = new PiRemoteClient(() => ({ url: `ws://127.0.0.1:${port}`, token: "wrong-token" }));
+	let authRejected = false;
+	await badClient.ping().catch(() => (authRejected = true));
+	check(authRejected, "remote server: rejects requests with an invalid token");
+
+	const remoteClient = new PiRemoteClient(() => ({ url: `ws://127.0.0.1:${port}`, token: serverToken }));
+	const ping = await remoteClient.ping();
+	check(ping.vaultName === "TestVault" && ping.vaultPath === work, "remote server: ping returns vault name and path");
+	const listed = await remoteClient.listSessions();
+	check(listed.sessions.length === 1 && listed.sessions[0].title === "Remote session title", "remote server: lists sessions from the host");
+
+	const wsRpc = new PiRpcClient();
+	await wsRpc.start(remoteClient.buildSpawnOptions(lockedSession, {}));
+	const remoteState = await wsRpc.getState();
+	check(wsRpc.running && typeof remoteState.thinkingLevel === "string", "remote server: PiRpcClient talks to pi over WebSocket");
+	check(server.isSessionHeld(lockedSession), "remote server: tracks sessions held by connected mobile clients");
+
+	// A second mobile or desktop tab must not open a session file already held by an active client.
+	const duplicateRpc = new PiRpcClient();
+	let conflictRejected = false;
+	await duplicateRpc.start(remoteClient.buildSpawnOptions(lockedSession, {})).catch(() => (conflictRejected = true));
+	check(conflictRejected, "remote server: prevents a second client from opening a session file that is already in use");
+
+	await wsRpc.stop();
+	await server.stop();
 }
 
 const levels = await client.getAvailableThinkingLevels();

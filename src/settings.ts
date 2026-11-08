@@ -3,6 +3,7 @@ import type PiAgentPlugin from "./main";
 import { basename } from "path";
 import { DEFAULT_INHERITANCE, type Inheritance } from "./agentDir";
 import { disabled, enabled, isDisabled, readPackageEntries, replacePackageEntry, sourceOf, type PackageEntry } from "./packages";
+import { DEFAULT_SERVER_PORT, discoverServerUrls, generateServerToken } from "./remote/ws";
 import { findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE } from "./requirements";
 
 export interface PiAgentSettings {
@@ -31,10 +32,16 @@ export interface PiAgentSettings {
 	commandAllowlist: string;
 	// Send the model stand-ins for bulky tool output from older turns (pi-extension/trim-tool-output.ts).
 	trimToolOutput: boolean;
-	// pi's a2a_discussion tool and /a2a command (pi-extension/a2a).
-	a2aDiscussions: boolean;
 	// The model picker's last view: all models, or pi's scoped list (enabledModels).
 	showAllModels: boolean;
+	// Desktop server for Obsidian Mobile over Tailscale or LAN.
+	serverEnabled: boolean;
+	serverPort: number;
+	serverBindHost: string;
+	serverToken: string;
+	// Remote server connection (required on Obsidian Mobile, optional on desktop).
+	remoteUrl: string;
+	remoteToken: string;
 }
 
 export const DEFAULT_SETTINGS: PiAgentSettings = {
@@ -58,8 +65,13 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	obsidianControl: true,
 	commandAllowlist: "",
 	trimToolOutput: true,
-	a2aDiscussions: true,
 	showAllModels: false,
+	serverEnabled: false,
+	serverPort: DEFAULT_SERVER_PORT,
+	serverBindHost: "0.0.0.0",
+	serverToken: "",
+	remoteUrl: "",
+	remoteToken: "",
 };
 
 export class PiAgentSettingTab extends PluginSettingTab {
@@ -75,18 +87,23 @@ export class PiAgentSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		const s = this.plugin.settings;
 		const save = () => this.plugin.saveSettings();
+		const hasLocal = this.plugin.hasLocalFs;
+
+		if (!hasLocal) this.renderRemoteClientSection(containerEl);
 
 		new Setting(containerEl).setName("pi").setHeading();
 
-		new Setting(containerEl)
-			.setName("pi binary")
-			.setDesc("Command name or absolute path. Your login shell's PATH is used to resolve it.")
-			.addText((t) =>
-				t.setPlaceholder("pi").setValue(s.piPath).onChange(async (v) => {
-					s.piPath = v.trim() || "pi";
-					await save();
-				}),
-			);
+		if (hasLocal) {
+			new Setting(containerEl)
+				.setName("pi binary")
+				.setDesc("Command name or absolute path. Your login shell's PATH is used to resolve it.")
+				.addText((t) =>
+					t.setPlaceholder("pi").setValue(s.piPath).onChange(async (v) => {
+						s.piPath = v.trim() || "pi";
+						await save();
+					}),
+				);
+		}
 
 		new Setting(containerEl)
 			.setName("Default model")
@@ -118,43 +135,48 @@ export class PiAgentSettingTab extends PluginSettingTab {
 				}),
 			);
 
-		new Setting(containerEl).setName("Inheritance").setHeading();
+		if (hasLocal) {
+			this.renderDesktopServerSection(containerEl);
+			this.renderRemoteClientSection(containerEl);
 
-		new Setting(containerEl)
-			.setName("Keep the panel's pi separate from your terminal pi")
-			.setDesc("Off by default: the panel shares your terminal pi's ~/.pi/agent profile. Turn on to use ~/.pi/harness and choose what to inherit below. The vault's own .pi folder loads either way once you have trusted it in pi. Reload pi after changing anything here.")
-			.addToggle((t) =>
-				t.setValue(s.isolate).onChange(async (v) => {
-					s.isolate = v;
-					await save();
-					this.display();
-				}),
-			);
+			new Setting(containerEl).setName("Inheritance").setHeading();
 
-		const inherited: [keyof Inheritance, string, string][] = [
-			["logins", "Logins", "Your provider credentials (auth.json), linked so a refreshed token is shared. A login that depends on a provider package also needs that package, for example installed in the vault's .pi folder."],
-			["models", "Custom models", "Models and providers you defined in models.json."],
-			["settings", "Default model and settings", "Default provider, model and thinking level, enabled models, compaction and shell prefix, copied once. Never the package list."],
-			["sessions", "Session history", "Keep this vault's sessions where your terminal pi keeps them, so the history is one list."],
-			["trust", "Vault trust", "Your decision in pi to trust this vault, which is what lets the vault's own .pi folder load."],
-			["mcpLogins", "Legacy MCP logins", "Links mcp-oauth/ for pi-mcp-adapter. Native MCP tokens in mcp-auth.json are not shared with a separate profile."],
-			["mcpServers", "Legacy MCP servers", "For pi-mcp-adapter: include global MCP files, or use only the vault's .mcp.json when off. Native MCP reads the vault's .pi/mcp.json and this pi profile's mcp.json instead."],
-			["skills", "Skills", "Skills in ~/.agents/skills and ~/.pi/agent/skills."],
-			["extensions", "Local extensions", "Extensions in ~/.pi/agent/extensions. Packages you installed with pi install are not inherited one by one: install the ones you want in the vault's .pi folder (pi install -l), or switch the separation off."],
-			["agents", "Subagents", "Subagent definitions in ~/.pi/agent/agents, for an extension that uses them."],
-			["prompts", "Prompt templates", "Templates in ~/.pi/agent/prompts."],
-		];
-		if (s.isolate) {
-			for (const [key, name, desc] of inherited) {
-				new Setting(containerEl)
-					.setName(name)
-					.setDesc(desc)
-					.addToggle((t) =>
-						t.setValue(s.inherit[key]).onChange(async (v) => {
-							s.inherit = { ...s.inherit, [key]: v };
-							await save();
-						}),
-					);
+			new Setting(containerEl)
+				.setName("Keep the panel's pi separate from your terminal pi")
+				.setDesc("Off by default: the panel shares your terminal pi's ~/.pi/agent profile. Turn on to use ~/.pi/harness and choose what to inherit below. The vault's own .pi folder loads either way once you have trusted it in pi. Reload pi after changing anything here.")
+				.addToggle((t) =>
+					t.setValue(s.isolate).onChange(async (v) => {
+						s.isolate = v;
+						await save();
+						this.display();
+					}),
+				);
+
+			const inherited: [keyof Inheritance, string, string][] = [
+				["logins", "Logins", "Your provider credentials (auth.json), linked so a refreshed token is shared. A login that depends on a provider package also needs that package, for example installed in the vault's .pi folder."],
+				["models", "Custom models", "Models and providers you defined in models.json."],
+				["settings", "Default model and settings", "Default provider, model and thinking level, enabled models, compaction and shell prefix, copied once. Never the package list."],
+				["sessions", "Session history", "Keep this vault's sessions where your terminal pi keeps them, so the history is one list."],
+				["trust", "Vault trust", "Your decision in pi to trust this vault, which is what lets the vault's own .pi folder load."],
+				["mcpLogins", "Legacy MCP logins", "Links mcp-oauth/ for pi-mcp-adapter. Native MCP tokens in mcp-auth.json are not shared with a separate profile."],
+				["mcpServers", "Legacy MCP servers", "For pi-mcp-adapter: include global MCP files, or use only the vault's .mcp.json when off. Native MCP reads the vault's .pi/mcp.json and this pi profile's mcp.json instead."],
+				["skills", "Skills", "Skills in ~/.agents/skills and ~/.pi/agent/skills."],
+				["extensions", "Local extensions", "Extensions in ~/.pi/agent/extensions. Packages you installed with pi install are not inherited one by one: install the ones you want in the vault's .pi folder (pi install -l), or switch the separation off."],
+				["agents", "Subagents", "Subagent definitions in ~/.pi/agent/agents, for an extension that uses them."],
+				["prompts", "Prompt templates", "Templates in ~/.pi/agent/prompts."],
+			];
+			if (s.isolate) {
+				for (const [key, name, desc] of inherited) {
+					new Setting(containerEl)
+						.setName(name)
+						.setDesc(desc)
+						.addToggle((t) =>
+							t.setValue(s.inherit[key]).onChange(async (v) => {
+								s.inherit = { ...s.inherit, [key]: v };
+								await save();
+							}),
+						);
+				}
 			}
 		}
 
@@ -163,15 +185,17 @@ export class PiAgentSettingTab extends PluginSettingTab {
 		const packagesEl = containerEl.createDiv();
 		void this.renderPackages(packagesEl);
 
-		new Setting(containerEl)
-			.setName("Let pi use the web viewer")
-			.setDesc("Gives pi tools to open pages in Obsidian's web viewer, read them, click, type, take a screenshot and run scripts in them. You watch it happen in a tab. The web viewer keeps you logged in to sites, so pi acts there as you, and a page it reads can contain text that tries to steer it: leave this off unless you want it. Needs the Web viewer core plugin. Reload pi after changing this.")
-			.addToggle((t) =>
-				t.setValue(s.browserControl).onChange(async (v) => {
-					s.browserControl = v;
-					await save();
-				}),
-			);
+		if (hasLocal) {
+			new Setting(containerEl)
+				.setName("Let pi use the web viewer")
+				.setDesc("Gives pi tools to open pages in Obsidian's web viewer, read them, click, type, take a screenshot and run scripts in them. You watch it happen in a tab. The web viewer keeps you logged in to sites, so pi acts there as you, and a page it reads can contain text that tries to steer it: leave this off unless you want it. Needs the Web viewer core plugin. Reload pi after changing this.")
+				.addToggle((t) =>
+					t.setValue(s.browserControl).onChange(async (v) => {
+						s.browserControl = v;
+						await save();
+					}),
+				);
+		}
 
 		new Setting(containerEl)
 			.setName("Let pi use Obsidian")
@@ -195,37 +219,31 @@ export class PiAgentSettingTab extends PluginSettingTab {
 				});
 			});
 
-		new Setting(containerEl)
-			.setName("Let pi hold A2A discussions")
-			.setDesc("Lets pi propose a discussion between two agents from different providers who argue opposite stances on a question, while a referee from a third provider checks whether their arguments make sense. You choose the models and start it, or decline; /a2a <question> asks for one. The agents search the web with rpiv-web-tools, and their model calls cost what they cost. Reload pi after changing this.")
-			.addToggle((t) =>
-				t.setValue(s.a2aDiscussions).onChange(async (v) => {
-					s.a2aDiscussions = v;
-					await save();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Connect legacy MCP servers when pi starts")
-			.setDesc("For pi-mcp-adapter and the vault's .mcp.json: connects available HTTP servers right away rather than waiting until something uses them. Pi's native MCP connects servers from .pi/mcp.json itself.")
-			.addToggle((t) =>
-				t.setValue(s.connectMcpOnStart).onChange(async (v) => {
-					s.connectMcpOnStart = v;
-					await save();
-				}),
-			);
+		if (hasLocal) {
+			new Setting(containerEl)
+				.setName("Connect legacy MCP servers when pi starts")
+				.setDesc("For pi-mcp-adapter and the vault's .mcp.json: connects available HTTP servers right away rather than waiting until something uses them. Pi's native MCP connects servers from .pi/mcp.json itself.")
+				.addToggle((t) =>
+					t.setValue(s.connectMcpOnStart).onChange(async (v) => {
+						s.connectMcpOnStart = v;
+						await save();
+					}),
+				);
+		}
 
 		new Setting(containerEl).setName("Skills and context").setHeading();
 
-		new Setting(containerEl)
-			.setName("Extra skill folders")
-			.setDesc("One path per line, relative to the vault or absolute, e.g. .claude/skills. Skills in .pi/skills and .agents/skills are found by pi on its own.")
-			.addTextArea((t) =>
-				t.setValue(s.extraSkillPaths).onChange(async (v) => {
-					s.extraSkillPaths = v;
-					await save();
-				}),
-			);
+		if (hasLocal) {
+			new Setting(containerEl)
+				.setName("Extra skill folders")
+				.setDesc("One path per line, relative to the vault or absolute, e.g. .claude/skills. Skills in .pi/skills and .agents/skills are found by pi on its own.")
+				.addTextArea((t) =>
+					t.setValue(s.extraSkillPaths).onChange(async (v) => {
+						s.extraSkillPaths = v;
+						await save();
+					}),
+				);
+		}
 
 		new Setting(containerEl)
 			.setName("Share the active note")
@@ -282,6 +300,131 @@ export class PiAgentSettingTab extends PluginSettingTab {
 		});
 	}
 
+	private renderDesktopServerSection(containerEl: HTMLElement): void {
+		const s = this.plugin.settings;
+		const save = () => this.plugin.saveSettings();
+
+		new Setting(containerEl).setName("Mobile server").setHeading();
+
+		new Setting(containerEl)
+			.setName("Host server for Obsidian Mobile")
+			.setDesc("Starts a WebSocket server inside desktop Obsidian so your phone can use this machine's pi over Tailscale.")
+			.addToggle((t) =>
+				t.setValue(s.serverEnabled).onChange(async (v) => {
+					s.serverEnabled = v;
+					if (v && !s.serverToken) s.serverToken = generateServerToken();
+					await save();
+					await this.plugin.syncRemoteServer();
+					this.display();
+				}),
+			);
+
+		if (!s.serverEnabled) return;
+
+		const urls = discoverServerUrls(s.serverPort || DEFAULT_SERVER_PORT, s.serverBindHost);
+		const urlSummary = urls.length ? `Reachable at: ${urls.join("  ·  ")}` : "Listening on the configured address and port.";
+
+		new Setting(containerEl)
+			.setName("Server port")
+			.setDesc(urlSummary)
+			.addText((t) =>
+				t.setPlaceholder(String(DEFAULT_SERVER_PORT)).setValue(String(s.serverPort || DEFAULT_SERVER_PORT)).onChange(async (v) => {
+					const parsed = Number.parseInt(v.trim(), 10);
+					if (Number.isFinite(parsed) && parsed > 0 && parsed <= 65535) {
+						s.serverPort = parsed;
+						await save();
+						await this.plugin.syncRemoteServer();
+					}
+				}),
+			)
+			.addButton((b) =>
+				b.setButtonText("Copy URL").onClick(async () => {
+					const primary = urls[0] ?? `ws://127.0.0.1:${s.serverPort || DEFAULT_SERVER_PORT}`;
+					await navigator.clipboard.writeText(primary);
+					new Notice(`Copied ${primary}`);
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Bind address")
+			.setDesc("0.0.0.0 listens on all interfaces, including Tailscale. Set your Tailscale IP to restrict listening to that interface.")
+			.addText((t) =>
+				t.setPlaceholder("0.0.0.0").setValue(s.serverBindHost).onChange(async (v) => {
+					s.serverBindHost = v.trim() || "0.0.0.0";
+					await save();
+					await this.plugin.syncRemoteServer();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Access token")
+			.setDesc("Enter this token on Obsidian Mobile to authenticate connections.")
+			.addText((t) =>
+				t.setValue(s.serverToken).onChange(async (v) => {
+					s.serverToken = v.trim();
+					await save();
+					await this.plugin.syncRemoteServer();
+				}),
+			)
+			.addButton((b) =>
+				b.setButtonText("Copy").onClick(async () => {
+					await navigator.clipboard.writeText(s.serverToken);
+					new Notice("Copied access token.");
+				}),
+			)
+			.addButton((b) =>
+				b.setButtonText("Regenerate").onClick(async () => {
+					s.serverToken = generateServerToken();
+					await save();
+					await this.plugin.syncRemoteServer();
+					this.display();
+				}),
+			);
+	}
+
+	private renderRemoteClientSection(containerEl: HTMLElement): void {
+		const s = this.plugin.settings;
+		const save = () => this.plugin.saveSettings();
+		const isMobile = !this.plugin.hasLocalFs;
+
+		new Setting(containerEl).setName("Remote pi server").setHeading();
+
+		new Setting(containerEl)
+			.setName("Server URL")
+			.setDesc(
+				isMobile
+					? "Tailscale or LAN address of the desktop machine running Obsidian, e.g. ws://100.64.0.1:31415."
+					: "Leave empty to run pi locally on this machine. Set an address (e.g. ws://100.64.0.1:31415) to use a remote pi server instead.",
+			)
+			.addText((t) =>
+				t.setPlaceholder("ws://100.x.y.z:31415").setValue(s.remoteUrl).onChange(async (v) => {
+					s.remoteUrl = v.trim();
+					await save();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Access token")
+			.setDesc("The access token from Settings → Pi Workbench → Mobile server on the desktop machine.")
+			.addText((t) => {
+				t.inputEl.type = "password";
+				t.setPlaceholder("Paste access token").setValue(s.remoteToken).onChange(async (v) => {
+					s.remoteToken = v.trim();
+					await save();
+				});
+			})
+			.addButton((b) =>
+				b.setButtonText("Test connection").onClick(async () => {
+					try {
+						const info = await this.plugin.remoteClient.ping();
+						new Notice(`Connected to "${info.vaultName}" (${info.vaultPath}).`);
+					} catch (err) {
+						new Notice(`Connection failed: ${(err as Error).message}`);
+					}
+				}),
+			);
+	}
+
 	// Every package the panel's pi loads, from its own config folder and from the vault's .pi folder,
 	// with a switch each. Off is pi's own kind of off: the package stays installed and loads nothing.
 	private async renderPackages(el: HTMLElement): Promise<void> {
@@ -289,8 +432,12 @@ export class PiAgentSettingTab extends PluginSettingTab {
 		const s = plugin.settings;
 		const header = new Setting(el).setName("Packages").setDesc("Checking…");
 
-		const installed = await plugin.requirements.installed().catch((err: Error) => err);
-		if (installed instanceof Error) return void header.setDesc(`Couldn't run pi list: ${installed.message}`);
+		const installed = await plugin.installedPackages().catch((err: Error) => err);
+		if (installed instanceof Error) return void header.setDesc(`Couldn't inspect packages: ${installed.message}`);
+		if (plugin.isRemote) {
+			header.setDesc("Packages are managed on the remote server. Installed on the server: " + (installed.map((p) => basename(p.path)).join(", ") || "none") + ".");
+			return;
+		}
 		header.setDesc("Pi Workbench only inspects installation status; it never installs, removes, or updates Pi packages. Manage packages yourself in a terminal. The switches below only control whether an installed package loads.");
 
 		const missingPackages = [...findRequired(installed)].filter(([, pkg]) => pkg === null).map(([name]) => name);

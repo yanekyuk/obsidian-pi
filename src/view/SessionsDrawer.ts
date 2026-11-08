@@ -3,6 +3,7 @@ import { listSessions, type SessionSummary } from "../sessions";
 
 export interface SessionsHost {
 	sessionDirs(): string[];
+	loadSessions?(): Promise<{ sessions: SessionSummary[]; openElsewhere?: Iterable<string> }>;
 	currentSessionFile(): string | null;
 	// Session files held by other chat panels; two pi processes must never share one.
 	sessionsOpenElsewhere(): Set<string>;
@@ -29,6 +30,7 @@ export class SessionsDrawer {
 	private listEl: HTMLElement;
 	private sessions: SessionSummary[] = [];
 	private visible: SessionSummary[] = [];
+	private remoteOpenElsewhere = new Set<string>();
 	private selected = 0;
 	private loadId = 0;
 	onClose: () => void = () => {};
@@ -77,9 +79,12 @@ export class SessionsDrawer {
 		const id = ++this.loadId;
 		if (!this.sessions.length) this.render("Loading…");
 		try {
-			const sessions = await listSessions(this.host.sessionDirs());
+			const loaded = this.host.loadSessions
+				? await this.host.loadSessions()
+				: { sessions: await listSessions(this.host.sessionDirs()) };
 			if (id !== this.loadId) return; // a newer refresh superseded this one
-			this.sessions = sessions;
+			this.sessions = loaded.sessions;
+			this.remoteOpenElsewhere = new Set(loaded.openElsewhere ?? []);
 			this.render();
 		} catch (err) {
 			if (id !== this.loadId) return;
@@ -125,7 +130,8 @@ export class SessionsDrawer {
 		}
 
 		const current = this.host.currentSessionFile();
-		const elsewhere = this.host.sessionsOpenElsewhere();
+		const elsewhere = new Set([...this.host.sessionsOpenElsewhere(), ...this.remoteOpenElsewhere]);
+		elsewhere.delete(current ?? "");
 		// Search results are ranked by relevance, so date headings would be out of order there.
 		const grouped = !this.searchEl.value.trim();
 		let lastGroup = "";
