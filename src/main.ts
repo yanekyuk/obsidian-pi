@@ -19,7 +19,7 @@ import { sharedPiEnvironment } from "./piEnvironment";
 import { buildSystemPrompt } from "./prompt";
 import { PiRemoteClient } from "./remote/client";
 import { PiRemoteServer, type RemoteSessionOverrides } from "./remote/server";
-import { DEFAULT_SERVER_PORT, generateServerToken } from "./remote/ws";
+import { DEFAULT_SERVER_PORT, discoverServerUrls, generateServerToken } from "./remote/ws";
 import type { PiSpawnOptions } from "./rpc/PiRpcClient";
 import { listSessions, type SessionSummary } from "./sessions";
 import { DEFAULT_SETTINGS, PiAgentSettingTab, type PiAgentSettings } from "./settings";
@@ -46,7 +46,10 @@ export default class PiAgentPlugin extends Plugin {
 	statusBar!: StatusBar;
 
 	requirements = new Requirements({ piCommand: () => this.piCommand() });
-	remoteClient = new PiRemoteClient(() => ({ url: this.settings.remoteUrl, token: this.settings.remoteToken }));
+	remoteClient = new PiRemoteClient(() => ({
+		url: this.settings.remoteUrl,
+		token: this.settings.remoteToken || this.settings.serverToken,
+	}));
 	remoteServer: PiRemoteServer | null = null;
 	cachedAdvisorModel: string | undefined = undefined;
 
@@ -55,7 +58,7 @@ export default class PiAgentPlugin extends Plugin {
 	}
 
 	get isRemote(): boolean {
-		return !this.hasLocalFs || Boolean(this.settings.remoteUrl.trim());
+		return !this.hasLocalFs;
 	}
 
 	get vaultPath(): string {
@@ -164,10 +167,21 @@ export default class PiAgentPlugin extends Plugin {
 			this.remoteServer = null;
 			return;
 		}
+		let settingsChanged = false;
 		if (!this.settings.serverToken) {
 			this.settings.serverToken = generateServerToken();
-			await this.saveSettings();
+			settingsChanged = true;
 		}
+		if (!this.settings.remoteToken) {
+			this.settings.remoteToken = this.settings.serverToken;
+			settingsChanged = true;
+		}
+		const discovered = discoverServerUrls(this.settings.serverPort || DEFAULT_SERVER_PORT, this.settings.serverBindHost || "0.0.0.0");
+		if (!this.settings.remoteUrl && discovered[0]) {
+			this.settings.remoteUrl = discovered[0];
+			settingsChanged = true;
+		}
+		if (settingsChanged) await this.saveSettings();
 		if (!this.remoteServer) {
 			this.remoteServer = new PiRemoteServer({
 				vaultName: () => this.app.vault.getName(),

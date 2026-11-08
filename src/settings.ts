@@ -137,7 +137,6 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		if (hasLocal) {
 			this.renderDesktopServerSection(containerEl);
-			this.renderRemoteClientSection(containerEl);
 
 			new Setting(containerEl).setName("Inheritance").setHeading();
 
@@ -375,6 +374,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 			.addButton((b) =>
 				b.setButtonText("Regenerate").onClick(async () => {
 					s.serverToken = generateServerToken();
+					s.remoteToken = s.serverToken;
 					await save();
 					await this.plugin.syncRemoteServer();
 					this.display();
@@ -385,17 +385,12 @@ export class PiAgentSettingTab extends PluginSettingTab {
 	private renderRemoteClientSection(containerEl: HTMLElement): void {
 		const s = this.plugin.settings;
 		const save = () => this.plugin.saveSettings();
-		const isMobile = !this.plugin.hasLocalFs;
 
 		new Setting(containerEl).setName("Remote pi server").setHeading();
 
 		new Setting(containerEl)
 			.setName("Server URL")
-			.setDesc(
-				isMobile
-					? "Tailscale or LAN address of the desktop machine running Obsidian, e.g. ws://100.64.0.1:31415."
-					: "Leave empty to run pi locally on this machine. Set an address (e.g. ws://100.64.0.1:31415) to use a remote pi server instead.",
-			)
+			.setDesc("Tailscale or LAN address of the desktop machine running Obsidian, e.g. ws://100.64.0.1:31415.")
 			.addText((t) =>
 				t.setPlaceholder("ws://100.x.y.z:31415").setValue(s.remoteUrl).onChange(async (v) => {
 					s.remoteUrl = v.trim();
@@ -408,7 +403,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 			.setDesc("The access token from Settings → Pi Workbench → Mobile server on the desktop machine.")
 			.addText((t) => {
 				t.inputEl.type = "password";
-				t.setPlaceholder("Paste access token").setValue(s.remoteToken).onChange(async (v) => {
+				t.setPlaceholder("Paste access token").setValue(s.remoteToken || s.serverToken).onChange(async (v) => {
 					s.remoteToken = v.trim();
 					await save();
 				});
