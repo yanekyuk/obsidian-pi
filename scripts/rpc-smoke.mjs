@@ -627,8 +627,9 @@ const check = (ok, label, detail = "") => {
 	const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
 	check(manifest.isDesktopOnly === false, "manifest: isDesktopOnly is false so Obsidian Mobile loads the plugin");
 
-	// Bundle src/main.ts the same way esbuild.config.mjs does, then evaluate it with a mobile-only
-	// require() that provides "obsidian" and throws "Cannot find module" for all Node and Electron modules.
+	// Bundle src/main.ts the same way esbuild.config.mjs does, then evaluate it in an isolated
+	// VM without Node's Buffer or process globals, with a mobile-only require("obsidian").
+	const { runInNewContext } = await import("vm");
 	const mobileBundle = join(work, "mobile-main.cjs");
 	await esbuild.build({
 		entryPoints: [join(root, "src/main.ts")],
@@ -651,12 +652,25 @@ const check = (ok, label, detail = "") => {
 						this.app = app;
 						this.manifest = manifestObj;
 					}
+					addChild() {}
+					registerView() {}
+					registerHoverLinkSource() {}
+					addSettingTab() {}
+					addRibbonIcon() {}
+					registerObsidianProtocolHandler() {}
+					addCommand() {}
+					registerEvent() {}
+					async loadData() {
+						return {};
+					}
 				},
 				ItemView: class {},
 				PluginSettingTab: class {},
 				Modal: class {},
 				FuzzySuggestModal: class {},
-				Component: class {},
+				Component: class {
+					registerEvent() {}
+				},
 				TFile: class {},
 				Notice: class {},
 				Menu: class {},
@@ -675,10 +689,66 @@ const check = (ok, label, detail = "") => {
 		throw new Error(`Cannot find module '${id}'`);
 	};
 	const mobileModule = { exports: {} };
-	new Function("module", "exports", "require", mobileCode)(mobileModule, mobileModule.exports, mobileRequire);
+	const sandbox = {
+		window: {},
+		document: {},
+		navigator: {},
+		URL,
+		URLSearchParams,
+		TextDecoder,
+		TextEncoder,
+		Uint8Array,
+		ArrayBuffer,
+		Blob,
+		Promise,
+		Map,
+		Set,
+		WeakMap,
+		WeakSet,
+		Error,
+		TypeError,
+		RegExp,
+		Date,
+		Math,
+		JSON,
+		Object,
+		Array,
+		String,
+		Number,
+		Boolean,
+		Symbol,
+		Proxy,
+		Reflect,
+		parseInt,
+		parseFloat,
+		isNaN,
+		isFinite,
+		setTimeout,
+		clearTimeout,
+		setInterval,
+		clearInterval,
+		console,
+		crypto: globalThis.crypto,
+		WebSocket: globalThis.WebSocket,
+		fetch: globalThis.fetch,
+		module: mobileModule,
+		exports: mobileModule.exports,
+		require: mobileRequire,
+	};
+	sandbox.globalThis = sandbox;
+	sandbox.window = sandbox;
+	runInNewContext(mobileCode, sandbox);
 	const MobilePlugin = mobileModule.exports.default ?? mobileModule.exports;
-	const mobileInstance = new MobilePlugin({ vault: { adapter: {}, getName: () => "MobileVault" }, workspace: {} }, manifest);
-	check(typeof MobilePlugin === "function" && mobileInstance.hasLocalFs === false && mobileInstance.isRemote === true, "mobile bundle: loads without Node or Electron and detects mobile remote mode");
+	const mobileInstance = new MobilePlugin(
+		{
+			vault: { adapter: {}, getName: () => "MobileVault", on: () => ({}) },
+			metadataCache: { on: () => ({}) },
+			workspace: { onLayoutReady: () => {}, on: () => ({}) },
+		},
+		manifest,
+	);
+	await mobileInstance.onload();
+	check(typeof MobilePlugin === "function" && mobileInstance.hasLocalFs === false && mobileInstance.isRemote === true, "mobile bundle: loads and runs onload() in a browser VM without Node globals or Electron");
 
 	// URL and token helpers
 	const tok = generateServerToken();

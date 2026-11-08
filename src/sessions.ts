@@ -11,7 +11,7 @@ export interface SessionSummary {
 }
 
 const READ_CONCURRENCY = 8;
-const SESSION_INFO = Buffer.from('"type":"session_info"');
+const SESSION_INFO = typeof Buffer !== "undefined" ? Buffer.from('"type":"session_info"') : new TextEncoder().encode('"type":"session_info"');
 const NEWLINE = 0x0a;
 
 // Session files run to several MB, and the list is reopened often. A file's title

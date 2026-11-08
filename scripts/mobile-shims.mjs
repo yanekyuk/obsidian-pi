@@ -9,6 +9,26 @@ import builtins from "builtin-modules";
 const NODE_MODULES = new Set(["electron", ...builtins, ...builtins.map((m) => `node:${m}`)]);
 
 const SHIM_SOURCE = `
+if (typeof globalThis.process === "undefined") {
+	globalThis.process = { env: {}, platform: "darwin" };
+}
+if (typeof globalThis.Buffer === "undefined") {
+	globalThis.Buffer = {
+		from: (val) => (typeof val === "string" ? new TextEncoder().encode(val) : new Uint8Array(val)),
+		alloc: (size) => new Uint8Array(size),
+		byteLength: (str) => new TextEncoder().encode(String(str)).byteLength,
+		concat: (list) => {
+			const total = list.reduce((sum, b) => sum + b.length, 0);
+			const out = new Uint8Array(total);
+			let offset = 0;
+			for (const b of list) {
+				out.set(b, offset);
+				offset += b.length;
+			}
+			return out;
+		},
+	};
+}
 const rawRequire = typeof require === "function" ? require : null;
 function tryRequire(id) {
 	if (!rawRequire) return null;

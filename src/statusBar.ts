@@ -1,4 +1,4 @@
-import { setIcon, type Plugin } from "obsidian";
+import { Platform, setIcon, type Plugin } from "obsidian";
 import type { ChatSession } from "./view/ChatSession";
 import type { ChatView } from "./view/ChatView";
 import { summarize } from "./view/TabSwitcher";
@@ -6,9 +6,9 @@ import { summarize } from "./view/TabSwitcher";
 // What pi is up to, in Obsidian's status bar: for when the panel is closed or out of sight.
 // Shows only while something is running or waiting for the user; clicking goes to that tab.
 export class StatusBar {
-	private el: HTMLElement;
-	private iconEl: HTMLElement;
-	private textEl: HTMLElement;
+	private el: HTMLElement | null = null;
+	private iconEl: HTMLElement | null = null;
+	private textEl: HTMLElement | null = null;
 	private target: ChatSession | null = null;
 
 	constructor(
@@ -16,7 +16,10 @@ export class StatusBar {
 		private views: () => ChatView[],
 		private reveal: (tab: ChatSession) => void,
 	) {
-		this.el = plugin.addStatusBarItem();
+		if (Platform.isMobile || typeof plugin.addStatusBarItem !== "function") return;
+		const el = plugin.addStatusBarItem();
+		if (!el) return;
+		this.el = el;
 		this.el.addClass("pi-status-bar", "mod-clickable");
 		this.iconEl = this.el.createSpan({ cls: "pi-status-bar-icon" });
 		this.textEl = this.el.createSpan({ cls: "pi-status-bar-text" });
@@ -27,6 +30,7 @@ export class StatusBar {
 	}
 
 	refresh(): void {
+		if (!this.el || !this.iconEl || !this.textEl) return;
 		const tabs = this.views().flatMap((view) => view.allTabs());
 		const summary = summarize(tabs.filter((tab) => tab.status === "working" || tab.status === "asking"));
 		if (!summary) {

@@ -98,6 +98,10 @@ if (!testCopy && !existsSync(join(dest, "data.json")) && releasedData && existsS
 	cpSync(releasedData, join(dest, "data.json"));
 	console.log(`Copied the settings of ${legacyId}.`);
 }
+if (!testCopy && legacyData()) {
+	rmSync(join(pluginsDir, legacyId), { recursive: true, force: true });
+	console.log(`Removed legacy folder ${legacyId}.`);
+}
 
 console.log(`Installed ${manifest.id} ${manifest.version} to ${dest}`);
 if (testCopy) console.log(`Enable "${manifest.name}" under Settings → Community plugins. Don't open one session in both panels at once.`);
