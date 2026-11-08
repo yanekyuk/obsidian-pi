@@ -163,7 +163,7 @@ export class ChatView extends ItemView {
 
 		// Obsidian hides a view's own header (and its addAction buttons) while the view is
 		// docked in a sidebar, so the controls live inside the panel, styled like the file explorer's.
-		const toolbar = root.createDiv({ cls: "pi-toolbar nav-header" });
+		const toolbar = root.createDiv({ cls: "pi-toolbar" });
 		this.titleEl = toolbar.createDiv({ cls: "pi-toolbar-title", attr: { "aria-label": "Open tabs", role: "button", tabindex: "0" } });
 		this.nameEl = this.titleEl.createSpan({ cls: "pi-toolbar-name" });
 		setIcon(this.titleEl.createSpan({ cls: "pi-icon" }), "chevron-down");
@@ -177,9 +177,9 @@ export class ChatView extends ItemView {
 			this.switcher.open();
 		});
 
-		const buttons = toolbar.createDiv({ cls: "nav-buttons-container" });
+		const buttons = toolbar.createDiv({ cls: "pi-toolbar-buttons" });
 		const button = (icon: string, label: string, run: (evt: MouseEvent) => void) => {
-			const el = buttons.createDiv({ cls: "clickable-icon nav-action-button", attr: { "aria-label": label } });
+			const el = buttons.createDiv({ cls: "clickable-icon pi-toolbar-button", attr: { "aria-label": label } });
 			setIcon(el, icon);
 			el.addEventListener("click", run);
 			return el;

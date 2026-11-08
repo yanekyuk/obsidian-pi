@@ -5,6 +5,7 @@
 	position: relative;
 	display: flex;
 	flex-direction: column;
+	height: 100%;
 	padding: 0 !important;
 	overflow: hidden;
 }
@@ -1581,10 +1582,17 @@ textarea.pi-input:active {
 .pi-toolbar .is-reloading .svg-icon {
 	animation: pi-spin 1.2s linear infinite;
 }
-.pi-toolbar .nav-buttons-container {
+.pi-toolbar-buttons {
 	flex: none;
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-1);
 	padding: 0;
 	justify-content: flex-end;
+}
+.pi-toolbar-button.is-active {
+	color: var(--icon-color-focused);
+	background-color: var(--background-modifier-hover);
 }
 
 /* ---- warnings in the dock ---- */
@@ -1743,4 +1751,10 @@ textarea.pi-input:active {
 .is-mobile .pi-session-more,
 .is-mobile .pi-switcher-action {
 	opacity: 1;
+}
+.is-mobile textarea.pi-input {
+	font-size: max(16px, var(--font-ui-medium));
+}
+.workspace-drawer .workspace-leaf-content[data-type="pi-workbench-chat"]::after {
+	display: none !important;
 }
