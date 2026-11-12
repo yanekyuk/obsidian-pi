@@ -17,6 +17,8 @@ import { acceptWebSocket, ServerWebSocket, tokensMatch } from "./ws";
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 const STDERR_TAIL = 4000;
+const DETACH_GRACE_MS = 10 * 60_000;
+const MAX_BUFFERED_LINES = 2000;
 
 export interface RemoteSessionOverrides {
 	model?: string;
@@ -43,9 +45,31 @@ export interface RemoteServerHost {
 	onSessionsChanged?(): void;
 }
 
+interface ActiveToolStream {
+	start: string;
+	update: string | null;
+}
+
 interface ActiveRemoteSession {
 	id: number;
+	clientId: string;
 	sessionFile: string | null;
+	proc: ChildProcessWithoutNullStreams | null;
+	ws: ServerWebSocket | null;
+	stopping: boolean;
+	busy: boolean;
+	detachTimer: ReturnType<typeof setTimeout> | null;
+	stderrTail: string;
+	currentMessageEvents: string[];
+	currentToolEvents: Map<string, ActiveToolStream>;
+	pendingUiRequests: Map<string, string>;
+	lastQueueLine: string | null;
+	suppressEvents: boolean;
+	suppressTimer: ReturnType<typeof setTimeout> | null;
+	syncMessagesReqId: string | null;
+	replaySnapshot: string[] | null;
+	postSnapshotLines: string[];
+	stopProc: () => Promise<void>;
 	stop: () => Promise<void>;
 }
 
@@ -54,8 +78,11 @@ export class PiRemoteServer {
 	private sessions = new Map<number, ActiveRemoteSession>();
 	private nextSessionId = 1;
 	private listeningPort = 0;
+	private detachGraceMs = DETACH_GRACE_MS;
 
-	constructor(private host: RemoteServerHost) {}
+	constructor(private host: RemoteServerHost, opts?: { detachGraceMs?: number }) {
+		if (opts?.detachGraceMs !== undefined) this.detachGraceMs = opts.detachGraceMs;
+	}
 
 	get running(): boolean {
 		return this.server !== null;
@@ -68,16 +95,32 @@ export class PiRemoteServer {
 	heldSessionFiles(exceptId?: number): string[] {
 		const files: string[] = [];
 		for (const session of this.sessions.values()) {
-			if (session.id !== exceptId && session.sessionFile) files.push(session.sessionFile);
+			if (session.id !== exceptId && session.sessionFile && (session.ws !== null || session.busy)) {
+				files.push(session.sessionFile);
+			}
 		}
 		return files;
 	}
 
 	isSessionHeld(sessionFile: string, exceptId?: number): boolean {
 		for (const session of this.sessions.values()) {
-			if (session.id !== exceptId && session.sessionFile === sessionFile) return true;
+			if (session.id !== exceptId && session.sessionFile === sessionFile && (session.ws !== null || session.busy)) {
+				return true;
+			}
 		}
 		return false;
+	}
+
+	async reclaimDetachedSession(sessionFile: string | null, exceptId?: number): Promise<void> {
+		if (!sessionFile) return;
+		const matching = [...this.sessions.values()].filter(
+			(s) => s.id !== exceptId && s.sessionFile === sessionFile && s.ws === null && !s.busy,
+		);
+		for (const s of matching) {
+			this.clearTimers(s);
+			this.sessions.delete(s.id);
+			await s.stop().catch(() => {});
+		}
 	}
 
 	async start(opts: { port: number; bindHost: string; token: string }): Promise<number> {
@@ -114,6 +157,7 @@ export class PiRemoteServer {
 	async stop(): Promise<void> {
 		const active = [...this.sessions.values()];
 		this.sessions.clear();
+		for (const s of active) this.clearTimers(s);
 		await Promise.all(active.map((s) => s.stop().catch(() => {})));
 		const server = this.server;
 		this.server = null;
@@ -219,6 +263,7 @@ export class PiRemoteServer {
 			case "trash_session": {
 				const path = typeof payload.path === "string" ? payload.path : "";
 				if (!path) throw new Error("Missing session path.");
+				await this.reclaimDetachedSession(path);
 				if (this.host.isSessionHeld(path)) throw new Error("That session is open on another device or tab.");
 				await this.host.trashSession(path);
 				this.host.onSessionsChanged?.();
@@ -273,18 +318,221 @@ export class PiRemoteServer {
 		}
 	}
 
-	private handleRpcSocket(ws: ServerWebSocket): void {
-		const id = this.nextSessionId++;
-		let proc: ChildProcessWithoutNullStreams | null = null;
-		let stopping = false;
-		let initialized = false;
-		let stderrTail = "";
+	private clearTimers(entry: ActiveRemoteSession): void {
+		if (entry.detachTimer) {
+			clearTimeout(entry.detachTimer);
+			entry.detachTimer = null;
+		}
+		if (entry.suppressTimer) {
+			clearTimeout(entry.suppressTimer);
+			entry.suppressTimer = null;
+		}
+	}
 
+	private scheduleDetachCleanup(entry: ActiveRemoteSession): void {
+		if (entry.detachTimer) clearTimeout(entry.detachTimer);
+		entry.detachTimer = setTimeout(() => {
+			entry.detachTimer = null;
+			if (entry.ws !== null || !this.sessions.has(entry.id)) return;
+			if (entry.busy) {
+				// Keep the process alive while pi is actively executing a turn or compacting.
+				this.scheduleDetachCleanup(entry);
+				return;
+			}
+			this.clearTimers(entry);
+			this.sessions.delete(entry.id);
+			this.host.onSessionsChanged?.();
+			void entry.stop();
+		}, this.detachGraceMs);
+		entry.detachTimer.unref?.();
+	}
+
+	private buildReplaySnapshot(entry: ActiveRemoteSession): string[] {
+		const lines: string[] = [];
+		for (const tool of entry.currentToolEvents.values()) {
+			lines.push(tool.start);
+			if (tool.update) lines.push(tool.update);
+		}
+		lines.push(...entry.currentMessageEvents);
+		if (entry.lastQueueLine) lines.push(entry.lastQueueLine);
+		for (const req of entry.pendingUiRequests.values()) {
+			lines.push(req);
+		}
+		return lines;
+	}
+
+	private flushSuppressedEvents(entry: ActiveRemoteSession): void {
+		if (!entry.suppressEvents) return;
+		if (entry.suppressTimer) {
+			clearTimeout(entry.suppressTimer);
+			entry.suppressTimer = null;
+		}
+		const snapshot = entry.replaySnapshot ?? this.buildReplaySnapshot(entry);
+		const post = entry.postSnapshotLines;
+		entry.suppressEvents = false;
+		entry.syncMessagesReqId = null;
+		entry.replaySnapshot = null;
+		entry.postSnapshotLines = [];
+		if (!entry.ws) return;
+		for (const line of snapshot) entry.ws.send(line);
+		for (const line of post) entry.ws.send(line);
+	}
+
+	private attachSocket(entry: ActiveRemoteSession, ws: ServerWebSocket, reattached: boolean): void {
+		this.clearTimers(entry);
+		if (entry.ws && entry.ws !== ws) {
+			const prev = entry.ws;
+			entry.ws = null;
+			prev.clearListeners();
+			prev.close(1000, "Replaced by new connection");
+		}
+		entry.ws = ws;
+		if (reattached) {
+			entry.suppressEvents = true;
+			entry.syncMessagesReqId = null;
+			entry.replaySnapshot = null;
+			entry.postSnapshotLines = [];
+			// Fallback in case a raw RPC client reattaches without calling finishRemoteSync().
+			entry.suppressTimer = setTimeout(() => this.flushSuppressedEvents(entry), 1500);
+			entry.suppressTimer.unref?.();
+		} else {
+			entry.suppressEvents = false;
+			entry.syncMessagesReqId = null;
+			entry.replaySnapshot = null;
+			entry.postSnapshotLines = [];
+		}
+
+		ws.onClose(() => {
+			if (entry.ws !== ws) return;
+			entry.ws = null;
+			this.host.onSessionsChanged?.();
+			if (entry.stopping || !this.sessions.has(entry.id)) return;
+			this.scheduleDetachCleanup(entry);
+		});
+
+		ws.onMessage((text) => {
+			void this.handleClientMessage(entry, ws, text);
+		});
+
+		if (reattached) {
+			this.host.onSessionsChanged?.();
+			ws.send(JSON.stringify({
+				type: "pi_workbench_ready",
+				sessionFile: entry.sessionFile,
+				vaultPath: this.host.vaultPath(),
+				reattached: true,
+			}));
+		}
+	}
+
+	private async handleClientMessage(entry: ActiveRemoteSession, ws: ServerWebSocket, text: string): Promise<void> {
+		try {
+			const parsed = JSON.parse(text) as { id?: string; type?: string; sessionPath?: string };
+			if (parsed.type === "pi_workbench_ping") {
+				ws.send(JSON.stringify({ type: "pi_workbench_pong" }));
+				return;
+			}
+			if (parsed.type === "pi_workbench_stop") {
+				this.clearTimers(entry);
+				this.sessions.delete(entry.id);
+				entry.sessionFile = null;
+				this.host.onSessionsChanged?.();
+				await entry.stopProc();
+				ws.close(1000, "Stopped");
+				return;
+			}
+			if (parsed.type === "pi_workbench_replay") {
+				this.flushSuppressedEvents(entry);
+				return;
+			}
+			if (parsed.type === "extension_ui_response" && typeof parsed.id === "string") {
+				entry.pendingUiRequests.delete(parsed.id);
+			}
+			if (parsed.type === "get_messages" && entry.suppressEvents && typeof parsed.id === "string") {
+				entry.syncMessagesReqId = parsed.id;
+			}
+			if (parsed.type === "switch_session" && typeof parsed.sessionPath === "string") {
+				await this.reclaimDetachedSession(parsed.sessionPath, entry.id);
+				if (this.host.isSessionHeld(parsed.sessionPath) && entry.sessionFile !== parsed.sessionPath) {
+					ws.send(JSON.stringify({
+						type: "response",
+						id: parsed.id,
+						command: "switch_session",
+						success: false,
+						error: "That session is already open in another tab or device.",
+					}));
+					return;
+				}
+				entry.sessionFile = parsed.sessionPath;
+				this.host.onSessionsChanged?.();
+			}
+		} catch {
+			// Forward as-is
+		}
+		if (!entry.proc) return;
+		entry.proc.stdin.write(text + "\n");
+	}
+
+	private handleRpcSocket(ws: ServerWebSocket): void {
+		let initialized = false;
+		ws.onMessage((text) => {
+			if (initialized) return;
+			initialized = true;
+			ws.clearListeners();
+			void this.initRpcSession(ws, text);
+		});
+	}
+
+	private async initRpcSession(ws: ServerWebSocket, initText: string): Promise<void> {
+		let init: { type?: string; clientId?: string; sessionFile?: string | null; overrides?: RemoteSessionOverrides };
+		try {
+			init = JSON.parse(initText) as typeof init;
+		} catch {
+			ws.send(JSON.stringify({ type: "pi_workbench_error", error: "Invalid init message." }));
+			ws.close(1002, "Invalid init");
+			return;
+		}
+
+		const clientId = typeof init.clientId === "string" && init.clientId ? init.clientId : "";
+		const requested = typeof init.sessionFile === "string" && init.sessionFile ? init.sessionFile : null;
+		const usable = requested && existsSync(requested) ? requested : null;
+
+		if (clientId) {
+			const existing = [...this.sessions.values()].find((s) => s.clientId === clientId);
+			if (existing) {
+				if (existing.proc && !existing.stopping && (!usable || !existing.sessionFile || existing.sessionFile === usable)) {
+					this.attachSocket(existing, ws, true);
+					return;
+				}
+				this.clearTimers(existing);
+				this.sessions.delete(existing.id);
+				await existing.stop().catch(() => {});
+			}
+		}
+
+		if (usable) {
+			const detached = [...this.sessions.values()].find(
+				(s) => s.sessionFile === usable && s.ws === null && s.proc !== null && !s.stopping,
+			);
+			if (detached) {
+				if (clientId) detached.clientId = clientId;
+				this.attachSocket(detached, ws, true);
+				return;
+			}
+		}
+
+		if (usable && this.host.isSessionHeld(usable)) {
+			ws.send(JSON.stringify({ type: "pi_workbench_error", error: "That session is already open in another tab or device." }));
+			ws.close(1008, "Session in use");
+			return;
+		}
+
+		const id = this.nextSessionId++;
 		const stopProc = async (): Promise<void> => {
-			const current = proc;
+			const current = entry.proc;
 			if (!current) return;
-			proc = null;
-			stopping = true;
+			entry.proc = null;
+			entry.stopping = true;
 			await new Promise<void>((r) => {
 				const force = setTimeout(() => current.kill("SIGKILL"), 2000);
 				current.once("exit", () => {
@@ -297,92 +545,49 @@ export class PiRemoteServer {
 
 		const entry: ActiveRemoteSession = {
 			id,
-			sessionFile: null,
+			clientId,
+			sessionFile: usable,
+			proc: null,
+			ws: null,
+			stopping: false,
+			busy: false,
+			detachTimer: null,
+			stderrTail: "",
+			currentMessageEvents: [],
+			currentToolEvents: new Map(),
+			pendingUiRequests: new Map(),
+			lastQueueLine: null,
+			suppressEvents: false,
+			suppressTimer: null,
+			syncMessagesReqId: null,
+			replaySnapshot: null,
+			postSnapshotLines: [],
+			stopProc,
 			stop: async () => {
+				this.clearTimers(entry);
+				const attached = entry.ws;
+				entry.ws = null;
 				await stopProc();
-				ws.close(1000, "Server stopping");
+				attached?.close(1000, "Server stopping");
 			},
 		};
 		this.sessions.set(id, entry);
-
-		ws.onClose(() => {
-			this.sessions.delete(id);
-			this.host.onSessionsChanged?.();
-			void stopProc();
-		});
-
-		ws.onMessage((text) => {
-			if (!initialized) {
-				initialized = true;
-				void this.startRemotePi(ws, entry, text, (spawned) => {
-					proc = spawned;
-				}, () => stopping, (chunk) => {
-					stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL);
-					return stderrTail;
-				});
-				return;
-			}
-			if (!proc) return;
-			try {
-				const parsed = JSON.parse(text) as { id?: string; type?: string; sessionPath?: string };
-				if (parsed.type === "switch_session" && typeof parsed.sessionPath === "string") {
-					if (this.host.isSessionHeld(parsed.sessionPath) && entry.sessionFile !== parsed.sessionPath) {
-						ws.send(JSON.stringify({
-							type: "response",
-							id: parsed.id,
-							command: "switch_session",
-							success: false,
-							error: "That session is already open in another tab or device.",
-						}));
-						return;
-					}
-					entry.sessionFile = parsed.sessionPath;
-					this.host.onSessionsChanged?.();
-				}
-			} catch {
-				// Forward as-is
-			}
-			proc.stdin.write(text + "\n");
-		});
-	}
-
-	private async startRemotePi(
-		ws: ServerWebSocket,
-		entry: ActiveRemoteSession,
-		initText: string,
-		setProc: (proc: ChildProcessWithoutNullStreams) => void,
-		isStopping: () => boolean,
-		appendStderr: (chunk: string) => string,
-	): Promise<void> {
-		let init: { type?: string; sessionFile?: string | null; overrides?: RemoteSessionOverrides };
-		try {
-			init = JSON.parse(initText) as typeof init;
-		} catch {
-			ws.send(JSON.stringify({ type: "pi_workbench_error", error: "Invalid init message." }));
-			ws.close(1002, "Invalid init");
-			return;
-		}
-
-		const requested = typeof init.sessionFile === "string" && init.sessionFile ? init.sessionFile : null;
-		const usable = requested && existsSync(requested) ? requested : null;
-		if (usable && this.host.isSessionHeld(usable)) {
-			ws.send(JSON.stringify({ type: "pi_workbench_error", error: "That session is already open in another tab or device." }));
-			ws.close(1008, "Session in use");
-			return;
-		}
-		entry.sessionFile = usable;
+		this.attachSocket(entry, ws, false);
 		this.host.onSessionsChanged?.();
 
 		let opts: PiSpawnOptions;
 		try {
 			opts = await this.host.buildSpawnOptions(usable, init.overrides);
 		} catch (err) {
+			this.clearTimers(entry);
+			this.sessions.delete(entry.id);
+			this.host.onSessionsChanged?.();
 			ws.send(JSON.stringify({ type: "pi_workbench_error", error: (err as Error).message }));
 			ws.close(1011, "Spawn config failed");
 			return;
 		}
 
-		if (!this.sessions.has(entry.id)) return;
+		if (!this.sessions.has(entry.id) || entry.stopping) return;
 
 		const child = spawn(opts.binary, ["--mode", "rpc", ...opts.args], {
 			cwd: opts.cwd,
@@ -393,8 +598,8 @@ export class PiRemoteServer {
 		let spawned = false;
 		child.once("spawn", () => {
 			spawned = true;
-			setProc(child);
-			ws.send(JSON.stringify({
+			entry.proc = child;
+			entry.ws?.send(JSON.stringify({
 				type: "pi_workbench_ready",
 				sessionFile: usable,
 				vaultPath: this.host.vaultPath(),
@@ -403,8 +608,11 @@ export class PiRemoteServer {
 
 		child.once("error", (err) => {
 			if (!spawned) {
-				ws.send(JSON.stringify({ type: "pi_workbench_error", error: err.message }));
-				ws.close(1011, "Spawn failed");
+				this.clearTimers(entry);
+				this.sessions.delete(entry.id);
+				this.host.onSessionsChanged?.();
+				entry.ws?.send(JSON.stringify({ type: "pi_workbench_error", error: err.message }));
+				entry.ws?.close(1011, "Spawn failed");
 			}
 		});
 
@@ -418,42 +626,166 @@ export class PiRemoteServer {
 				buffer = buffer.slice(newline + 1);
 				if (line.endsWith("\r")) line = line.slice(0, -1);
 				if (!line) continue;
-				this.trackSessionFromLine(entry, line);
-				ws.send(line);
+				this.handleStdoutLine(entry, line);
 			}
 		});
 
-		let latestStderr = "";
 		child.stderr.on("data", (chunk: Buffer) => {
-			latestStderr = appendStderr(chunk.toString("utf8"));
+			entry.stderrTail = (entry.stderrTail + chunk.toString("utf8")).slice(-STDERR_TAIL);
 		});
 		child.stdin.on("error", () => {});
 
 		child.once("exit", (code) => {
+			this.clearTimers(entry);
 			this.sessions.delete(entry.id);
+			entry.proc = null;
 			this.host.onSessionsChanged?.();
-			ws.send(JSON.stringify({
+			const attached = entry.ws;
+			entry.ws = null;
+			if (!attached) return;
+			attached.send(JSON.stringify({
 				type: "pi_workbench_exit",
 				code,
-				stderr: latestStderr.trim(),
-				expected: isStopping(),
+				stderr: entry.stderrTail.trim(),
+				expected: entry.stopping,
 			}));
-			ws.close(1000, "pi exited");
+			attached.close(1000, "pi exited");
 		});
 	}
 
-	private trackSessionFromLine(entry: ActiveRemoteSession, line: string): void {
+	private handleStdoutLine(entry: ActiveRemoteSession, line: string): void {
+		type ParsedLine = {
+			type?: string;
+			id?: string;
+			command?: string;
+			success?: boolean;
+			data?: { sessionFile?: unknown; cancelled?: boolean };
+			message?: { role?: string };
+			toolCallId?: string;
+			method?: string;
+		};
+		let msg: ParsedLine | null = null;
 		try {
-			const msg = JSON.parse(line) as { type?: string; command?: string; success?: boolean; data?: { sessionFile?: unknown } };
-			if (msg.type === "response" && msg.command === "get_state" && msg.success) {
+			msg = JSON.parse(line) as ParsedLine;
+		} catch {
+			msg = null;
+		}
+
+		const isResponse = msg?.type === "response";
+		if (isResponse && entry.suppressEvents && msg?.id && msg.id === entry.syncMessagesReqId && !entry.replaySnapshot) {
+			entry.replaySnapshot = this.buildReplaySnapshot(entry);
+			entry.postSnapshotLines = [];
+		}
+
+		if (msg) {
+			this.trackFromParsedLine(entry, msg, line);
+		}
+
+		if (!entry.ws) return;
+		if (entry.suppressEvents && !isResponse) {
+			if (entry.replaySnapshot && entry.postSnapshotLines.length < MAX_BUFFERED_LINES) {
+				entry.postSnapshotLines.push(line);
+			}
+			return;
+		}
+		entry.ws.send(line);
+	}
+
+	private trackFromParsedLine(
+		entry: ActiveRemoteSession,
+		msg: {
+			type?: string;
+			command?: string;
+			success?: boolean;
+			data?: { sessionFile?: unknown; cancelled?: boolean };
+			message?: { role?: string };
+			toolCallId?: string;
+			id?: string;
+			method?: string;
+		},
+		line: string,
+	): void {
+		if (msg.type === "response") {
+			if (msg.command === "get_state" && msg.success) {
 				const nextFile = typeof msg.data?.sessionFile === "string" && msg.data.sessionFile ? msg.data.sessionFile : null;
 				if (entry.sessionFile !== nextFile) {
 					entry.sessionFile = nextFile;
 					this.host.onSessionsChanged?.();
 				}
+			} else if ((msg.command === "new_session" || msg.command === "switch_session") && msg.success && !msg.data?.cancelled) {
+				entry.currentMessageEvents = [];
+				entry.currentToolEvents.clear();
+				entry.pendingUiRequests.clear();
+				entry.lastQueueLine = null;
 			}
-		} catch {
-			// Ignore non-JSON lines
+			return;
+		}
+
+		switch (msg.type) {
+			case "agent_start":
+				entry.busy = true;
+				entry.currentMessageEvents = [];
+				entry.currentToolEvents.clear();
+				break;
+			case "agent_settled":
+				entry.busy = false;
+				entry.currentMessageEvents = [];
+				entry.currentToolEvents.clear();
+				entry.pendingUiRequests.clear();
+				entry.lastQueueLine = null;
+				if (entry.ws === null && this.sessions.has(entry.id)) {
+					this.scheduleDetachCleanup(entry);
+				}
+				break;
+			case "compaction_start":
+				entry.busy = true;
+				break;
+			case "compaction_end":
+				entry.busy = false;
+				if (entry.ws === null && this.sessions.has(entry.id)) {
+					this.scheduleDetachCleanup(entry);
+				}
+				break;
+			case "message_start":
+				if (msg.message?.role === "assistant") {
+					entry.currentMessageEvents = [line];
+				}
+				break;
+			case "message_update":
+				if (entry.currentMessageEvents.length < MAX_BUFFERED_LINES) {
+					entry.currentMessageEvents.push(line);
+				}
+				break;
+			case "message_end":
+				entry.currentMessageEvents = [];
+				break;
+			case "tool_execution_start":
+				if (typeof msg.toolCallId === "string") {
+					entry.currentToolEvents.set(msg.toolCallId, { start: line, update: null });
+				}
+				break;
+			case "tool_execution_update":
+				if (typeof msg.toolCallId === "string") {
+					const active = entry.currentToolEvents.get(msg.toolCallId);
+					if (active) active.update = line;
+				}
+				break;
+			case "tool_execution_end":
+				if (typeof msg.toolCallId === "string") {
+					entry.currentToolEvents.delete(msg.toolCallId);
+				}
+				break;
+			case "queue_update":
+				entry.lastQueueLine = line;
+				break;
+			case "extension_ui_request":
+				if (
+					typeof msg.id === "string" &&
+					(msg.method === "select" || msg.method === "confirm" || msg.method === "input" || msg.method === "editor")
+				) {
+					entry.pendingUiRequests.set(msg.id, line);
+				}
+				break;
 		}
 	}
 

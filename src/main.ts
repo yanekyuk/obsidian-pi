@@ -534,6 +534,7 @@ export default class PiAgentPlugin extends Plugin {
 	}
 
 	private async buildLocalSpawnOptions(sessionFile: string | null, overrides?: RemoteSessionOverrides): Promise<PiSpawnOptions> {
+		if (!overrides && sessionFile) await this.remoteServer?.reclaimDetachedSession(sessionFile);
 		const s = this.settings;
 		const vault = this.vaultPath;
 		const addendum = overrides?.systemPromptAddendum ?? s.systemPromptAddendum;

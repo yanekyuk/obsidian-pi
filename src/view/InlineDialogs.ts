@@ -96,6 +96,10 @@ export class InlineDialogs {
 		return this.queue.length;
 	}
 
+	has(id: string): boolean {
+		return this.queue.some((req) => req.id === id);
+	}
+
 	push(req: Request): void {
 		this.queue.push(req);
 		if (this.queue.length === 1) this.render();

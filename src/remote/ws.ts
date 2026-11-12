@@ -77,12 +77,22 @@ export class ServerWebSocket {
 	private buffer: Buffer = Buffer.alloc(0);
 	private fragments: Buffer[] = [];
 	private closed = false;
+	private awaitingPong = false;
 	private messageListeners = new Set<(text: string) => void>();
 	private closeListeners = new Set<() => void>();
 	private pingTimer: ReturnType<typeof setInterval>;
 
 	constructor(private socket: Duplex) {
-		this.pingTimer = setInterval(() => this.sendFrame(0x9, Buffer.alloc(0)), PING_INTERVAL_MS);
+		this.pingTimer = setInterval(() => {
+			if (this.awaitingPong) {
+				this.closed = true;
+				this.socket.destroy();
+				this.finishClose();
+				return;
+			}
+			this.awaitingPong = true;
+			this.sendFrame(0x9, Buffer.alloc(0));
+		}, PING_INTERVAL_MS);
 		this.pingTimer.unref?.();
 		socket.on("data", (chunk: Buffer) => this.onData(chunk));
 		socket.on("close", () => this.finishClose());
@@ -95,6 +105,11 @@ export class ServerWebSocket {
 
 	onClose(fn: () => void): void {
 		this.closeListeners.add(fn);
+	}
+
+	clearListeners(): void {
+		this.messageListeners.clear();
+		this.closeListeners.clear();
 	}
 
 	send(text: string): void {
@@ -142,6 +157,7 @@ export class ServerWebSocket {
 
 	private onData(chunk: Buffer): void {
 		if (this.closed) return;
+		this.awaitingPong = false;
 		this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk;
 
 		while (this.buffer.length >= 2) {
@@ -239,6 +255,9 @@ export function acceptWebSocket(req: IncomingMessage, socket: Duplex, head: Buff
 		].join("\r\n"),
 	);
 	if ("setNoDelay" in socket && typeof socket.setNoDelay === "function") socket.setNoDelay(true);
+	if ("setKeepAlive" in socket && typeof (socket as { setKeepAlive?: (enable: boolean, delay: number) => void }).setKeepAlive === "function") {
+		(socket as { setKeepAlive: (enable: boolean, delay: number) => void }).setKeepAlive(true, 15_000);
+	}
 	const ws = new ServerWebSocket(socket);
 	if (head.length) socket.emit("data", head);
 	return ws;

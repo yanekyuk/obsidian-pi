@@ -29,6 +29,10 @@ export interface PiSpawnOptions {
 }
 
 interface Pending {
+	id: string;
+	type: string;
+	payload: Record<string, unknown>;
+	sent: boolean;
 	resolve: (data: unknown) => void;
 	reject: (err: Error) => void;
 	timer: ReturnType<typeof setTimeout> | null;
@@ -36,24 +40,57 @@ interface Pending {
 
 type EventListener = (event: RpcEvent) => void;
 type ExitListener = (info: { code: number | null; stderr: string; expected: boolean }) => void;
+type ReconnectListener = (reattached: boolean) => void;
 
 // Commands that legitimately block for a long time and must not time out.
 const LONG_RUNNING = new Set(["prompt", "abort", "compact", "bash", "new_session", "switch_session", "clone", "fork"]);
+// Read-only commands that can be safely re-sent if a remote WebSocket drops mid-request.
+const IDEMPOTENT_REQUESTS = new Set([
+	"get_state",
+	"get_messages",
+	"get_entries",
+	"get_commands",
+	"get_available_models",
+	"get_available_thinking_levels",
+	"get_session_stats",
+]);
 const REQUEST_TIMEOUT_MS = 30_000;
+const CONNECT_TIMEOUT_MS = 8_000;
+const CLIENT_PING_INTERVAL_MS = 20_000;
+const STALE_SOCKET_MS = 25_000;
+const PING_TIMEOUT_MS = 3_000;
 const STDERR_TAIL = 4000;
 
 export class PiRpcClient {
+	private readonly clientId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 	private proc: ChildProcessWithoutNullStreams | null = null;
 	private ws: WebSocket | null = null;
+	private remoteOpts: PiRemoteSpawnOptions | null = null;
+	private reconnecting: Promise<void> | null = null;
+	private verifying: Promise<void> | null = null;
+	private verifyWaiters = new Set<(alive: boolean) => void>();
+	private wakeRetry: (() => void) | null = null;
+	private activeConnectAbort: (() => void) | null = null;
+	private activeConnectStartedAt = 0;
+	private lastReceivedAt = 0;
+	private clientPingTimer: ReturnType<typeof setInterval> | null = null;
+	private cleanupLifecycle: (() => void) | null = null;
+	private queuedWrites: Record<string, unknown>[] = [];
 	private pending = new Map<string, Pending>();
 	private eventListeners = new Set<EventListener>();
 	private exitListeners = new Set<ExitListener>();
+	private reconnectingListeners = new Set<() => void>();
+	private reconnectedListeners = new Set<ReconnectListener>();
 	private nextId = 1;
 	private stderrTail = "";
 	private stopping = false;
 
 	get running(): boolean {
-		return this.proc !== null || this.ws !== null;
+		return this.proc !== null || this.ws !== null || this.reconnecting !== null;
+	}
+
+	get isReconnecting(): boolean {
+		return this.reconnecting !== null;
 	}
 
 	onEvent(fn: EventListener): () => void {
@@ -66,8 +103,18 @@ export class PiRpcClient {
 		return () => this.exitListeners.delete(fn);
 	}
 
+	onReconnecting(fn: () => void): () => void {
+		this.reconnectingListeners.add(fn);
+		return () => this.reconnectingListeners.delete(fn);
+	}
+
+	onReconnected(fn: ReconnectListener): () => void {
+		this.reconnectedListeners.add(fn);
+		return () => this.reconnectedListeners.delete(fn);
+	}
+
 	start(opts: PiSpawnOptions): Promise<void> {
-		if (this.proc || this.ws) return Promise.resolve();
+		if (this.proc || this.ws || this.reconnecting) return Promise.resolve();
 		this.stopping = false;
 		this.stderrTail = "";
 		if (opts.remote) return this.startRemote(opts.remote);
@@ -102,7 +149,14 @@ export class PiRpcClient {
 		});
 	}
 
-	private startRemote(remote: PiRemoteSpawnOptions): Promise<void> {
+	private async startRemote(remote: PiRemoteSpawnOptions): Promise<void> {
+		const opts: PiRemoteSpawnOptions = { ...remote };
+		await this.openRemoteSocket(opts);
+		this.remoteOpts = opts;
+		this.attachRemoteLifecycle();
+	}
+
+	private openRemoteSocket(remote: PiRemoteSpawnOptions): Promise<boolean> {
 		return new Promise((resolve, reject) => {
 			let ws: WebSocket;
 			try {
@@ -112,16 +166,42 @@ export class PiRpcClient {
 				return;
 			}
 			let settled = false;
+			this.activeConnectStartedAt = Date.now();
+			const finishAttempt = () => {
+				clearTimeout(connectTimer);
+				if (this.activeConnectAbort === abortAttempt) this.activeConnectAbort = null;
+			};
+			const abortAttempt = () => {
+				if (settled) return;
+				settled = true;
+				finishAttempt();
+				try {
+					ws.close();
+				} catch {
+					// Ignore
+				}
+				reject(new Error("Connection attempt timed out."));
+			};
+			this.activeConnectAbort = abortAttempt;
+			const connectTimer = setTimeout(abortAttempt, CONNECT_TIMEOUT_MS);
+			connectTimer.unref?.();
 
 			ws.addEventListener("open", () => {
+				this.lastReceivedAt = Date.now();
 				ws.send(JSON.stringify({
 					type: "pi_workbench_init",
+					clientId: this.clientId,
 					sessionFile: remote.sessionFile,
 					overrides: remote.overrides,
 				}));
 			});
 
 			ws.addEventListener("message", (evt) => {
+				this.lastReceivedAt = Date.now();
+				if (this.verifyWaiters.size) {
+					for (const waiter of this.verifyWaiters) waiter(true);
+					this.verifyWaiters.clear();
+				}
 				const raw = typeof evt.data === "string" ? evt.data : String(evt.data ?? "");
 				for (const line of raw.split("\n")) {
 					const trimmed = line.endsWith("\r") ? line.slice(0, -1) : line;
@@ -131,26 +211,40 @@ export class PiRpcClient {
 							type?: string;
 							error?: string;
 							vaultPath?: string;
+							sessionFile?: string | null;
+							reattached?: boolean;
 							code?: number | null;
 							stderr?: string;
 							expected?: boolean;
 						};
+						if (parsed.type === "pi_workbench_pong") continue;
 						if (parsed.type === "pi_workbench_ready") {
 							if (parsed.vaultPath) remote.onVaultPath?.(parsed.vaultPath);
+							if (typeof parsed.sessionFile === "string" && parsed.sessionFile) {
+								remote.sessionFile = parsed.sessionFile;
+							}
 							if (!settled) {
 								settled = true;
+								finishAttempt();
 								this.ws = ws;
-								resolve();
+								this.startClientPing();
+								if (parsed.reattached && this.reconnectedListeners.size === 0) {
+									this.finishRemoteSync();
+								}
+								resolve(Boolean(parsed.reattached));
 							}
 							continue;
 						}
 						if (parsed.type === "pi_workbench_error") {
-							const err = new Error(parsed.error || "Remote pi server rejected the connection.");
+							const err = Object.assign(new Error(parsed.error || "Remote pi server rejected the connection."), { fatal: true });
 							if (!settled) {
 								settled = true;
+								finishAttempt();
 								ws.close();
 								reject(err);
 							} else {
+								this.remoteOpts = null;
+								this.stopRemoteLifecycle();
 								this.stderrTail = err.message;
 								this.handleWsExit(ws, 1, false);
 							}
@@ -158,6 +252,8 @@ export class PiRpcClient {
 						}
 						if (parsed.type === "pi_workbench_exit") {
 							if (typeof parsed.stderr === "string") this.stderrTail = parsed.stderr;
+							this.remoteOpts = null;
+							this.stopRemoteLifecycle();
 							this.handleWsExit(ws, parsed.code ?? null, Boolean(parsed.expected) || this.stopping);
 							continue;
 						}
@@ -171,45 +267,297 @@ export class PiRpcClient {
 			ws.addEventListener("error", () => {
 				if (!settled) {
 					settled = true;
+					finishAttempt();
 					reject(new Error("Could not connect to the remote pi server."));
 				}
 			});
 
 			ws.addEventListener("close", () => {
+				if (this.verifyWaiters.size) {
+					for (const waiter of this.verifyWaiters) waiter(false);
+					this.verifyWaiters.clear();
+				}
 				if (!settled) {
 					settled = true;
+					finishAttempt();
 					reject(new Error("Connection to the remote pi server closed before pi started."));
 					return;
 				}
-				this.handleWsExit(ws, null, this.stopping);
+				if (this.stopping || !this.remoteOpts) {
+					this.handleWsExit(ws, null, this.stopping);
+					return;
+				}
+				if (this.ws === ws) {
+					void this.beginReconnect(ws);
+				}
 			});
 		});
 	}
 
+	private startClientPing(): void {
+		if (this.clientPingTimer) clearInterval(this.clientPingTimer);
+		this.clientPingTimer = setInterval(() => {
+			if (this.stopping || !this.remoteOpts || this.isDocumentHidden()) return;
+			if (this.ws && this.ws.readyState === 1) {
+				try {
+					this.ws.send(JSON.stringify({ type: "pi_workbench_ping" }));
+				} catch {
+					void this.beginReconnect(this.ws);
+				}
+			}
+		}, CLIENT_PING_INTERVAL_MS);
+		this.clientPingTimer.unref?.();
+	}
+
+	private attachRemoteLifecycle(): void {
+		this.stopRemoteLifecycle();
+		const cleanups: (() => void)[] = [];
+		const onWake = () => this.nudgeReconnect();
+		if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+			const onVis = () => {
+				if (document.visibilityState === "visible") onWake();
+			};
+			document.addEventListener("visibilitychange", onVis);
+			cleanups.push(() => document.removeEventListener("visibilitychange", onVis));
+		}
+		if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+			for (const evt of ["focus", "online", "pageshow"]) {
+				window.addEventListener(evt, onWake);
+				cleanups.push(() => window.removeEventListener(evt, onWake));
+			}
+		}
+		this.cleanupLifecycle = () => {
+			for (const fn of cleanups) fn();
+		};
+	}
+
+	private stopRemoteLifecycle(): void {
+		if (this.clientPingTimer) {
+			clearInterval(this.clientPingTimer);
+			this.clientPingTimer = null;
+		}
+		this.cleanupLifecycle?.();
+		this.cleanupLifecycle = null;
+	}
+
+	private isDocumentHidden(): boolean {
+		return typeof document !== "undefined" && document.visibilityState === "hidden";
+	}
+
+	// Called when the app returns to the foreground or the user clicks Retry.
+	nudgeReconnect(): void {
+		if (this.stopping || !this.remoteOpts) return;
+		if (this.reconnecting) {
+			if (this.activeConnectAbort && Date.now() - this.activeConnectStartedAt > 1500) {
+				this.activeConnectAbort();
+			}
+			this.wakeRetry?.();
+			return;
+		}
+		if (!this.ws || this.ws.readyState !== 1) {
+			void this.beginReconnect(this.ws ?? undefined);
+			return;
+		}
+		void this.verifySocket();
+	}
+
+	// Sends a lightweight application ping and reconnects if the socket is silently dead.
+	verifySocket(): Promise<void> {
+		if (!this.remoteOpts || this.stopping) return Promise.resolve();
+		if (this.reconnecting) return this.reconnecting;
+		if (this.verifying) return this.verifying;
+		const ws = this.ws;
+		if (!ws || ws.readyState !== 1) {
+			return this.beginReconnect(ws ?? undefined);
+		}
+		this.verifying = (async () => {
+			const alive = await new Promise<boolean>((resolve) => {
+				const timer = setTimeout(() => {
+					this.verifyWaiters.delete(onResult);
+					resolve(false);
+				}, PING_TIMEOUT_MS);
+				timer.unref?.();
+				const onResult = (ok: boolean) => {
+					clearTimeout(timer);
+					this.verifyWaiters.delete(onResult);
+					resolve(ok);
+				};
+				this.verifyWaiters.add(onResult);
+				try {
+					ws.send(JSON.stringify({ type: "pi_workbench_ping" }));
+				} catch {
+					onResult(false);
+				}
+			});
+			this.verifying = null;
+			if (!alive && !this.stopping && this.remoteOpts) {
+				try {
+					ws.close();
+				} catch {
+					// Ignore
+				}
+				await this.beginReconnect(ws);
+			}
+		})();
+		return this.verifying;
+	}
+
+	private beginReconnect(closedWs?: WebSocket): Promise<void> {
+		if (this.stopping || !this.remoteOpts) return Promise.resolve();
+		if (closedWs && this.ws === closedWs) {
+			this.ws = null;
+		}
+		if (this.clientPingTimer) {
+			clearInterval(this.clientPingTimer);
+			this.clientPingTimer = null;
+		}
+		for (const [id, pending] of this.pending) {
+			if (!pending.sent) continue;
+			if (IDEMPOTENT_REQUESTS.has(pending.type)) {
+				pending.sent = false;
+				if (pending.timer) {
+					clearTimeout(pending.timer);
+					pending.timer = null;
+				}
+			} else {
+				this.pending.delete(id);
+				if (pending.timer) clearTimeout(pending.timer);
+				pending.reject(new Error("Connection to the remote pi server was interrupted."));
+			}
+		}
+		if (this.reconnecting) return this.reconnecting;
+
+		for (const fn of this.reconnectingListeners) fn();
+		this.reconnecting = this.runReconnectLoop();
+		return this.reconnecting;
+	}
+
+	private async runReconnectLoop(): Promise<void> {
+		let attempt = 0;
+		while (!this.stopping && this.remoteOpts) {
+			if (attempt > 0 && this.isDocumentHidden()) {
+				await this.waitForWakeOrDelay(30_000);
+				if (this.stopping || !this.remoteOpts) break;
+			}
+			try {
+				const reattached = await this.openRemoteSocket(this.remoteOpts);
+				this.reconnecting = null;
+				this.flushQueuedTraffic();
+				for (const fn of this.reconnectedListeners) fn(reattached);
+				return;
+			} catch (err) {
+				if (this.stopping || !this.remoteOpts) break;
+				if ((err as { fatal?: boolean }).fatal) {
+					this.reconnecting = null;
+					this.remoteOpts = null;
+					this.stopRemoteLifecycle();
+					this.stderrTail = (err as Error).message;
+					this.finishExit(1, false);
+					return;
+				}
+				attempt++;
+				const delay = Math.min(400 * Math.pow(1.6, Math.min(attempt - 1, 6)), 8_000);
+				await this.waitForWakeOrDelay(delay);
+			}
+		}
+		this.reconnecting = null;
+	}
+
+	private waitForWakeOrDelay(ms: number): Promise<void> {
+		return new Promise((resolve) => {
+			const done = () => {
+				clearTimeout(timer);
+				if (this.wakeRetry === done) this.wakeRetry = null;
+				resolve();
+			};
+			const timer = setTimeout(done, ms);
+			timer.unref?.();
+			this.wakeRetry = done;
+		});
+	}
+
+	private flushQueuedTraffic(): void {
+		if (!this.ws || this.ws.readyState !== 1) return;
+		const writes = this.queuedWrites.splice(0);
+		for (const payload of writes) {
+			try {
+				this.ws.send(JSON.stringify(payload));
+			} catch {
+				// Ignore
+			}
+		}
+		for (const pending of this.pending.values()) {
+			if (pending.sent) continue;
+			try {
+				this.startPendingTimer(pending);
+				pending.sent = true;
+				this.ws.send(JSON.stringify(pending.payload));
+			} catch {
+				pending.sent = false;
+			}
+		}
+	}
+
+	finishRemoteSync(): void {
+		if (this.ws && this.ws.readyState === 1) {
+			try {
+				this.ws.send(JSON.stringify({ type: "pi_workbench_replay" }));
+			} catch {
+				// Ignore
+			}
+		}
+	}
+
 	async stop(): Promise<void> {
+		this.stopping = true;
+		this.remoteOpts = null;
+		this.stopRemoteLifecycle();
+		this.activeConnectAbort?.();
+		this.wakeRetry?.();
+		for (const waiter of this.verifyWaiters) waiter(false);
+		this.verifyWaiters.clear();
+		this.queuedWrites = [];
 		if (this.ws) {
 			const ws = this.ws;
-			this.stopping = true;
 			await new Promise<void>((resolve) => {
 				if (ws.readyState === 3) {
 					resolve();
 					return;
 				}
-				const force = setTimeout(resolve, 2000);
+				const force = setTimeout(() => {
+					try {
+						ws.close();
+					} catch {
+						// Ignore
+					}
+					resolve();
+				}, 2000);
 				const done = () => {
 					clearTimeout(force);
 					resolve();
 				};
 				ws.addEventListener("close", done, { once: true });
 				ws.addEventListener("error", done, { once: true });
-				ws.close();
+				if (ws.readyState === 1) {
+					try {
+						ws.send(JSON.stringify({ type: "pi_workbench_stop" }));
+					} catch {
+						ws.close();
+					}
+				} else {
+					ws.close();
+				}
 			});
 			this.handleWsExit(ws, 0, true);
 			return;
 		}
+		if (this.reconnecting) {
+			this.reconnecting = null;
+			this.finishExit(0, true);
+			return;
+		}
 		const proc = this.proc;
 		if (!proc) return;
-		this.stopping = true;
 		await new Promise<void>((resolve) => {
 			const force = setTimeout(() => proc.kill("SIGKILL"), 2000);
 			proc.once("close", () => {
@@ -245,6 +593,14 @@ export class PiRpcClient {
 			return; // Extensions occasionally print non-protocol noise to stdout.
 		}
 		if (msg.type === "response") {
+			if (this.remoteOpts && msg.success) {
+				if (msg.command === "get_state") {
+					const sf = (msg.data as { sessionFile?: unknown } | undefined)?.sessionFile;
+					if (typeof sf === "string" && sf) this.remoteOpts.sessionFile = sf;
+				} else if (msg.command === "new_session" && !(msg.data as { cancelled?: boolean } | undefined)?.cancelled) {
+					this.remoteOpts.sessionFile = null;
+				}
+			}
 			const pending = msg.id ? this.pending.get(msg.id) : undefined;
 			if (!pending || !msg.id) return;
 			this.pending.delete(msg.id);
@@ -281,9 +637,24 @@ export class PiRpcClient {
 		for (const fn of this.exitListeners) fn(info);
 	}
 
+	private startPendingTimer(pending: Pending): void {
+		if (pending.timer) clearTimeout(pending.timer);
+		pending.timer = LONG_RUNNING.has(pending.type)
+			? null
+			: setTimeout(() => {
+					this.pending.delete(pending.id);
+					pending.reject(new Error(`pi did not respond to "${pending.type}"`));
+				}, REQUEST_TIMEOUT_MS);
+	}
+
 	private write(payload: Record<string, unknown>): void {
-		if (this.ws) {
+		if (this.ws && this.ws.readyState === 1) {
 			this.ws.send(JSON.stringify(payload));
+			return;
+		}
+		if (this.remoteOpts && !this.stopping) {
+			this.queuedWrites.push(payload);
+			void this.beginReconnect(this.ws ?? undefined);
 			return;
 		}
 		if (!this.proc) throw new Error("pi is not running");
@@ -293,21 +664,57 @@ export class PiRpcClient {
 	request<T = unknown>(type: string, params: Record<string, unknown> = {}): Promise<T> {
 		return new Promise<T>((resolve, reject) => {
 			const id = `req-${this.nextId++}`;
-			const timer = LONG_RUNNING.has(type)
-				? null
-				: setTimeout(() => {
-						this.pending.delete(id);
-						reject(new Error(`pi did not respond to "${type}"`));
-					}, REQUEST_TIMEOUT_MS);
-			this.pending.set(id, { resolve: resolve as (data: unknown) => void, reject, timer });
-			try {
-				this.write({ id, type, ...params });
-			} catch (err) {
-				this.pending.delete(id);
-				if (timer) clearTimeout(timer);
-				reject(err as Error);
-			}
+			const payload: Record<string, unknown> = { id, type, ...params };
+			const pending: Pending = {
+				id,
+				type,
+				payload,
+				sent: false,
+				resolve: resolve as (data: unknown) => void,
+				reject,
+				timer: null,
+			};
+			this.pending.set(id, pending);
+			void this.dispatchPending(pending);
 		});
+	}
+
+	private async dispatchPending(pending: Pending): Promise<void> {
+		if (!this.pending.has(pending.id)) return;
+		if (this.remoteOpts) {
+			if (this.ws && this.ws.readyState === 1 && Date.now() - this.lastReceivedAt > STALE_SOCKET_MS) {
+				await this.verifySocket();
+			} else if (this.verifying) {
+				await this.verifying;
+			}
+			if (this.reconnecting) {
+				await this.reconnecting;
+			}
+			if (!this.pending.has(pending.id) || pending.sent) return;
+		}
+		try {
+			this.startPendingTimer(pending);
+			pending.sent = true;
+			if (this.ws && this.ws.readyState === 1) {
+				this.ws.send(JSON.stringify(pending.payload));
+				return;
+			}
+			if (!this.proc) throw new Error("pi is not running");
+			this.proc.stdin.write(JSON.stringify(pending.payload) + "\n");
+		} catch (err) {
+			if (this.remoteOpts && !this.stopping) {
+				pending.sent = false;
+				if (pending.timer) {
+					clearTimeout(pending.timer);
+					pending.timer = null;
+				}
+				void this.beginReconnect(this.ws ?? undefined);
+				return;
+			}
+			this.pending.delete(pending.id);
+			if (pending.timer) clearTimeout(pending.timer);
+			pending.reject(err as Error);
+		}
 	}
 
 	prompt(message: string, opts: { streamingBehavior?: "steer" | "followUp"; images?: ImageContent[] } = {}): Promise<void> {

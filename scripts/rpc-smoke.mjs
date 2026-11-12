@@ -989,6 +989,39 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 	await duplicateRpc.start(remoteClient.buildSpawnOptions(lockedSession, {})).catch(() => (conflictRejected = true));
 	check(conflictRejected, "remote server: prevents a second client from opening a session file that is already in use");
 
+	// Mobile backgrounding / unexpected WebSocket drop: the server keeps the pi process alive
+	// and the client automatically reconnects and reattaches without emitting a false exit.
+	let unexpectedExit = false;
+	let reconnectingCount = 0;
+	let reattachedFlag = null;
+	wsRpc.onExit((info) => {
+		if (!info.expected) unexpectedExit = true;
+	});
+	wsRpc.onReconnecting(() => {
+		reconnectingCount++;
+	});
+	const reconnectedPromise = new Promise((resolveReconnect) => {
+		wsRpc.onReconnected((reattached) => {
+			reattachedFlag = reattached;
+			wsRpc.finishRemoteSync();
+			resolveReconnect();
+		});
+	});
+	// Simulate the mobile OS dropping the WebSocket when the app is minimized.
+	wsRpc.ws.close();
+	// A request issued while reconnecting queues and resolves once the new socket reattaches.
+	const stateDuringReconnect = wsRpc.getState();
+	await reconnectedPromise;
+	const recoveredState = await stateDuringReconnect;
+	check(
+		!unexpectedExit && reconnectingCount === 1 && reattachedFlag === true && recoveredState.sessionFile === lockedSession,
+		"remote server: unexpected mobile WebSocket drop auto-reconnects and reattaches to the running pi process without firing onExit",
+	);
+
+	// Foreground liveness ping: verifySocket() confirms the socket is responsive via pi_workbench_ping/pong.
+	await wsRpc.verifySocket();
+	check(wsRpc.running && !wsRpc.isReconnecting, "remote server: verifySocket confirms a healthy WebSocket on foreground wake");
+
 	await wsRpc.stop();
 	// Immediate restart on the same session (as /reload does) must succeed without racing the server close handler.
 	await wsRpc.start(remoteClient.buildSpawnOptions(lockedSession, {}));

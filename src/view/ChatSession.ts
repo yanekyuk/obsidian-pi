@@ -100,6 +100,7 @@ export class ChatSession {
 	private started = false;
 	private startup: Promise<void> | null = null;
 	private connecting = false;
+	private reconnectBannerTimer: number | null = null;
 	private compacting = false;
 	private failed = false;
 	private unread = false;
@@ -178,6 +179,22 @@ export class ChatSession {
 		this.component.registerEvent(workspace.on("post-processor-change", () => rerenderMarkdownIn(this.el)));
 		this.client.onEvent((e) => this.handleEvent(e));
 		this.client.onExit((info) => this.handleExit(info));
+		this.client.onReconnecting(() => this.handleReconnecting());
+		this.client.onReconnected(() => void this.handleReconnected());
+		if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+			const onVis = () => {
+				if (document.visibilityState === "visible") this.onForeground();
+			};
+			document.addEventListener("visibilitychange", onVis);
+			this.component.register(() => document.removeEventListener("visibilitychange", onVis));
+		}
+		if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+			const onWake = () => this.onForeground();
+			for (const evt of ["online", "focus", "pageshow"]) {
+				window.addEventListener(evt, onWake);
+				this.component.register(() => window.removeEventListener(evt, onWake));
+			}
+		}
 		this.buildDom();
 		// Looking at a tab is what makes it read.
 		for (const type of ["pointerdown", "focusin"]) this.el.addEventListener(type, () => this.markRead());
@@ -281,6 +298,10 @@ export class ChatSession {
 
 	// Stops pi and takes the tab off the screen for good.
 	async dispose(): Promise<void> {
+		if (this.reconnectBannerTimer !== null) {
+			window.clearTimeout(this.reconnectBannerTimer);
+			this.reconnectBannerTimer = null;
+		}
 		this.side.dismiss();
 		this.dialogs.drop();
 		this.el.remove();
@@ -670,6 +691,10 @@ export class ChatSession {
 	}
 
 	private handleExit(info: { code: number | null; stderr: string; expected: boolean }): void {
+		if (this.reconnectBannerTimer !== null) {
+			window.clearTimeout(this.reconnectBannerTimer);
+			this.reconnectBannerTimer = null;
+		}
 		this.failed = !info.expected;
 		this.piQueue = { steering: [], followUp: [] };
 		void this.unqueue();
@@ -683,6 +708,54 @@ export class ChatSession {
 			label: "Restart",
 			run: () => void this.restart(),
 		});
+	}
+
+	private handleReconnecting(): void {
+		this.connecting = true;
+		this.setActivity("Reconnecting…");
+		if (this.reconnectBannerTimer !== null) window.clearTimeout(this.reconnectBannerTimer);
+		this.reconnectBannerTimer = window.setTimeout(() => {
+			this.reconnectBannerTimer = null;
+			if (!this.connecting || !this.client.isReconnecting) return;
+			this.showBanner(
+				"Reconnecting to remote pi server…",
+				"Waiting for the desktop server to respond.",
+				{ label: "Retry now", run: () => this.client.nudgeReconnect() },
+			);
+		}, 10_000);
+	}
+
+	private async handleReconnected(): Promise<void> {
+		if (this.reconnectBannerTimer !== null) {
+			window.clearTimeout(this.reconnectBannerTimer);
+			this.reconnectBannerTimer = null;
+		}
+		this.failed = false;
+		this.bannerEl.hide();
+		try {
+			await this.syncSession({ preserveDialogs: true });
+			if (!this.suggest.commands.length) {
+				const fromPi = (await this.client.getCommands()).filter((c) => c.name !== TREE_COMMAND);
+				this.suggest.commands = [...PANEL_COMMANDS.filter((c) => !fromPi.some((p) => p.name === c.name)), ...fromPi];
+				this.renderEmptyState();
+			}
+		} catch {
+			return;
+		} finally {
+			if (!this.client.isReconnecting) {
+				this.connecting = false;
+				this.setActivity(this.busy ? "Working…" : this.compacting ? "Compacting context…" : null);
+			}
+		}
+	}
+
+	private onForeground(): void {
+		if (!this.plugin.isRemote || !this.started) return;
+		if (this.client.running) {
+			this.client.nudgeReconnect();
+		} else if (this.failed && !this.connecting && this.host.isShowing(this) && this.plugin.remoteClient.configured) {
+			void this.restart();
+		}
 	}
 
 	// Which session file to start pi on, or null for a fresh session.
@@ -752,7 +825,8 @@ export class ChatSession {
 		return held !== null && linkedSession(this.app, note) === basename(held);
 	}
 
-	private async syncSession(): Promise<void> {
+	private async syncSession(opts?: { preserveDialogs?: boolean }): Promise<void> {
+		const wasBusy = this.busy;
 		this.state = await this.client.getState();
 		this.sessionFile = this.state.sessionFile ?? null;
 		if (this.pendingLink && this.state.sessionFile) {
@@ -767,12 +841,17 @@ export class ChatSession {
 		this.todos.setHidden(this.plugin.hiddenTodosFor(this.sessionFile));
 		this.firstPrompt = "";
 		this.savedTitle = "";
+		if (wasBusy && !this.state.isStreaming && !this.host.isShowing(this)) {
+			this.unread = true;
+		}
 		this.setBusy(this.state.isStreaming);
+		this.setCompacting(Boolean(this.state.isCompacting));
 		const [messages, { entries, leafId }] = await Promise.all([
 			this.client.getMessages(),
 			this.client.getEntries().catch(() => ({ entries: [] as SessionEntry[], leafId: null })),
 		]);
-		this.renderTranscript(messages, entries, leafId);
+		this.renderTranscript(messages, entries, leafId, opts?.preserveDialogs ? (this.state.isStreaming ? "keep" : "drop") : "cancel");
+		this.client.finishRemoteSync();
 		this.renderControls();
 		void this.refreshStats();
 		this.host.sessionsChanged();
@@ -1462,6 +1541,7 @@ export class ChatSession {
 	}
 
 	private askUser(req: ExtensionUiRequest & { form?: DialogForm }): void {
+		if (this.dialogs.has(req.id)) return;
 		this.dialogs.push(req);
 		// The question sits in this tab; say so if the user is looking somewhere else.
 		if (!this.host.isShowing(this)) this.callOver(`pi has a question for you in "${this.title}".`);
@@ -1470,14 +1550,23 @@ export class ChatSession {
 
 	// ---------------------------------------------------------------- transcript
 
-	private renderTranscript(messages: AgentMessage[], entries: SessionEntry[] = [], leafId: string | null = null): void {
+	private renderTranscript(
+		messages: AgentMessage[],
+		entries: SessionEntry[] = [],
+		leafId: string | null = null,
+		dialogPolicy: "cancel" | "drop" | "keep" = "cancel",
+	): void {
 		this.messagesEl.empty();
 		this.toolCards.clear();
 		this.settleToolGroup();
 		this.live = null;
-		// Whatever was pending belonged to the session that just went away.
-		this.dialogs.cancelAll();
-		this.side.reset();
+		if (dialogPolicy === "cancel") {
+			// Whatever was pending belonged to the session that just went away.
+			this.dialogs.cancelAll();
+			this.side.reset();
+		} else if (dialogPolicy === "drop") {
+			this.dialogs.drop();
+		}
 		this.activeBranches = activeBranchesOf(entries, leafId);
 		const currentBranch = this.activeBranches[this.activeBranches.length - 1] ?? null;
 		const isRendered = (m: AgentMessage) =>
