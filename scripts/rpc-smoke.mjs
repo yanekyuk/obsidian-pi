@@ -750,6 +750,39 @@ const check = (ok, label, detail = "") => {
 	await mobileInstance.onload();
 	check(typeof MobilePlugin === "function" && mobileInstance.hasLocalFs === false && mobileInstance.isRemote === true, "mobile bundle: loads and runs onload() in a browser VM without Node globals or Electron");
 
+	// Reload and session reselection: a tab that holds a session file must be allowed to resume
+	// its own session on reload/connect, while blocking any second tab from taking the same file.
+	{
+		const fakeTabA = { heldSessionFile: "/s/active.jsonl" };
+		const fakeTabB = { heldSessionFile: "/s/other.jsonl" };
+		const fakeView = {
+			tabFor(sessionFile, except) {
+				return [fakeTabA, fakeTabB].find((t) => t !== except && t.heldSessionFile === sessionFile) ?? null;
+			},
+			heldSessionFiles(except) {
+				return [fakeTabA, fakeTabB].filter((t) => t !== except).flatMap((t) => t.heldSessionFile ?? []);
+			},
+		};
+		mobileInstance.chatViews = () => [fakeView];
+		check(
+			mobileInstance.canRestoreTab("/s/active.jsonl") === false &&
+				mobileInstance.canRestoreTab("/s/active.jsonl", fakeTabA) === true &&
+				mobileInstance.canRestoreTab("/s/active.jsonl", fakeTabB) === false,
+			"reload/restore: canRestoreTab excludes the requesting tab itself so reload and addTab keep their session, while still blocking other tabs",
+		);
+		const dupTab = { heldSessionFile: "/s/active.jsonl" };
+		const viewWithDup = {
+			tabFor(sessionFile, except) {
+				return [fakeTabA, dupTab].find((t) => t !== except && t.heldSessionFile === sessionFile) ?? null;
+			},
+		};
+		mobileInstance.chatViews = () => [viewWithDup];
+		check(
+			mobileInstance.holderOf("/s/active.jsonl", fakeTabA)?.tab === dupTab,
+			"holderOf: checks remaining tabs in the same view when excluding a tab",
+		);
+	}
+
 	// URL and token helpers
 	const tok = generateServerToken();
 	check(tok.length === 48 && tokensMatch(tok, tok) && !tokensMatch(tok, "wrong") && !tokensMatch("", ""), "remote auth: token generation and constant-time comparison");
@@ -956,6 +989,10 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 	await duplicateRpc.start(remoteClient.buildSpawnOptions(lockedSession, {})).catch(() => (conflictRejected = true));
 	check(conflictRejected, "remote server: prevents a second client from opening a session file that is already in use");
 
+	await wsRpc.stop();
+	// Immediate restart on the same session (as /reload does) must succeed without racing the server close handler.
+	await wsRpc.start(remoteClient.buildSpawnOptions(lockedSession, {}));
+	check(wsRpc.running && (await wsRpc.getState()).sessionFile === lockedSession, "remote server: reloading a remote session reopens the same session file immediately after stop()");
 	await wsRpc.stop();
 	await server.stop();
 }

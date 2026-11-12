@@ -249,8 +249,8 @@ export default class PiAgentPlugin extends Plugin {
 		return { sessions: await listSessions(this.sessionDirectories()), openElsewhere: new Set() };
 	}
 
-	canRestoreTab(sessionFile: string): boolean {
-		if (!sessionFile || this.isSessionHeld(sessionFile)) return false;
+	canRestoreTab(sessionFile: string, except?: ChatSession): boolean {
+		if (!sessionFile || this.isSessionHeld(sessionFile, except)) return false;
 		return this.isRemote ? true : existsSync(sessionFile);
 	}
 
@@ -427,8 +427,8 @@ export default class PiAgentPlugin extends Plugin {
 	// The tab that has this session file, in whichever chat panel. Each file gets at most one pi process.
 	holderOf(sessionFile: string, except?: ChatSession): { view: ChatView; tab: ChatSession } | null {
 		for (const view of this.chatViews()) {
-			const tab = view.tabFor(sessionFile);
-			if (tab && tab !== except) return { view, tab };
+			const tab = view.tabFor(sessionFile, except);
+			if (tab) return { view, tab };
 		}
 		return null;
 	}

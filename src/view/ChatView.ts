@@ -293,8 +293,8 @@ export class ChatView extends ItemView {
 		return [...this.tabs];
 	}
 
-	tabFor(sessionFile: string): ChatSession | null {
-		return this.tabs.find((tab) => tab.heldSessionFile === sessionFile) ?? null;
+	tabFor(sessionFile: string, except?: ChatSession): ChatSession | null {
+		return this.tabs.find((tab) => tab !== except && tab.heldSessionFile === sessionFile) ?? null;
 	}
 
 	heldSessionFiles(except?: ChatSession | null): string[] {
@@ -309,7 +309,8 @@ export class ChatView extends ItemView {
 	// A new tab beside the ones that are open. An empty one is reused: two would be no use.
 	newTab(): void {
 		this.init();
-		this.activate(this.tabs.find((tab) => tab.isEmpty) ?? this.addTab({ sessionFile: null }, false));
+		const empty = (this.active?.isEmpty ? this.active : null) ?? this.tabs.find((tab) => tab.isEmpty);
+		this.activate(empty ?? this.addTab({ sessionFile: null }, false));
 	}
 
 	// Closing stops that tab's pi. The conversation stays in the session history.
@@ -347,7 +348,9 @@ export class ChatView extends ItemView {
 			new Notice("That session file no longer exists.");
 			return void this.drawer.refresh();
 		}
-		const empty = this.tabs.find((tab) => tab.isEmpty);
+		const holderAfterCheck = this.plugin.holderOf(path);
+		if (holderAfterCheck) return holderAfterCheck.view.revealTab(holderAfterCheck.tab);
+		const empty = (this.active?.isEmpty ? this.active : null) ?? this.tabs.find((tab) => tab.isEmpty);
 		if (!empty) return void this.addTab({ sessionFile: path });
 		this.activate(empty);
 		await empty.load(path);

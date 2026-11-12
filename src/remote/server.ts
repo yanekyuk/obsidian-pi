@@ -445,9 +445,10 @@ export class PiRemoteServer {
 	private trackSessionFromLine(entry: ActiveRemoteSession, line: string): void {
 		try {
 			const msg = JSON.parse(line) as { type?: string; command?: string; success?: boolean; data?: { sessionFile?: unknown } };
-			if (msg.type === "response" && msg.command === "get_state" && msg.success && typeof msg.data?.sessionFile === "string") {
-				if (entry.sessionFile !== msg.data.sessionFile) {
-					entry.sessionFile = msg.data.sessionFile;
+			if (msg.type === "response" && msg.command === "get_state" && msg.success) {
+				const nextFile = typeof msg.data?.sessionFile === "string" && msg.data.sessionFile ? msg.data.sessionFile : null;
+				if (entry.sessionFile !== nextFile) {
+					entry.sessionFile = nextFile;
 					this.host.onSessionsChanged?.();
 				}
 			}

@@ -190,7 +190,20 @@ export class PiRpcClient {
 		if (this.ws) {
 			const ws = this.ws;
 			this.stopping = true;
-			ws.close();
+			await new Promise<void>((resolve) => {
+				if (ws.readyState === 3) {
+					resolve();
+					return;
+				}
+				const force = setTimeout(resolve, 2000);
+				const done = () => {
+					clearTimeout(force);
+					resolve();
+				};
+				ws.addEventListener("close", done, { once: true });
+				ws.addEventListener("error", done, { once: true });
+				ws.close();
+			});
 			this.handleWsExit(ws, 0, true);
 			return;
 		}

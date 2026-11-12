@@ -214,7 +214,16 @@ export class ChatSession {
 
 	// A session nobody has said anything in: not worth keeping a second one of.
 	get isEmpty(): boolean {
-		return this.started && !this.failed && this.replaceable && !this.messagesEl.querySelector(".pi-msg") && !this.inputEl.value.trim();
+		return (
+			this.started &&
+			!this.failed &&
+			!this.isBusy &&
+			this.dialogs.pending === 0 &&
+			(!this.connecting || this.heldSessionFile === null) &&
+			!this.hasConversation &&
+			!this.messagesEl.querySelector(".pi-msg:not(.pi-msg-notice)") &&
+			!this.inputEl.value.trim()
+		);
 	}
 
 	get status(): TabStatus {
@@ -634,7 +643,10 @@ export class ChatSession {
 		}
 		this.setActivity("Starting pi…");
 		try {
-			await this.client.start(await this.plugin.buildSpawnOptions(session ?? this.resumeTarget()));
+			const target = session ?? this.resumeTarget();
+			this.sessionFile = target;
+			if (this.state) this.state.sessionFile = target ?? undefined;
+			await this.client.start(await this.plugin.buildSpawnOptions(target));
 			await this.syncSession();
 			const fromPi = (await this.client.getCommands()).filter((c) => c.name !== TREE_COMMAND);
 			this.suggest.commands = [...PANEL_COMMANDS.filter((c) => !fromPi.some((p) => p.name === c.name)), ...fromPi];
@@ -678,9 +690,10 @@ export class ChatSession {
 		// A tab resumes its own session or nothing: if that file is gone (pi only writes a
 		// session once it has messages), it must not grab another tab's.
 		const candidate = this.heldSessionFile;
-		const usable = candidate && this.plugin.canRestoreTab(candidate) && !this.plugin.holderOf(candidate, this) ? candidate : null;
+		const usable = candidate && this.plugin.canRestoreTab(candidate, this) ? candidate : null;
 		// Claim it synchronously, so a second tab starting at the same moment sees it as taken.
 		this.sessionFile = usable;
+		if (this.state) this.state.sessionFile = usable ?? undefined;
 		return usable;
 	}
 
@@ -1109,14 +1122,27 @@ export class ChatSession {
 
 	// Swaps this tab over to another session. The panel has made sure no other tab holds it.
 	async load(path: string): Promise<void> {
+		const previous = this.heldSessionFile;
+		this.sessionFile = path;
+		if (this.state) this.state.sessionFile = path;
+		await this.whenReady();
 		if (!this.client.running) {
 			this.sessionFile = path;
 			this.state = null;
 			return this.restart(path);
 		}
 		await this.stop();
-		const { cancelled } = await this.client.switchSession(path);
-		if (!cancelled) await this.syncSession();
+		try {
+			const { cancelled } = await this.client.switchSession(path);
+			if (!cancelled) {
+				await this.syncSession();
+				return;
+			}
+		} catch (err) {
+			new Notice(`pi: ${(err as Error).message}`);
+		}
+		this.sessionFile = previous;
+		if (this.state) this.state.sessionFile = previous ?? undefined;
 	}
 
 	async renameCurrent(): Promise<void> {
@@ -1527,8 +1553,9 @@ export class ChatSession {
 
 	private renderEmptyState(): void {
 		this.messagesEl.querySelector(".pi-empty")?.remove();
-		if (this.messagesEl.childElementCount > 0) return;
+		if (this.messagesEl.querySelector(".pi-msg:not(.pi-msg-notice), .pi-msg-notice.is-error, .pi-branch-divider, .pi-branch-card")) return;
 		const empty = this.messagesEl.createDiv({ cls: "pi-empty" });
+		this.messagesEl.prepend(empty);
 		setIcon(empty.createDiv({ cls: "pi-empty-icon" }), "pi");
 		empty.createDiv({ cls: "pi-empty-title", text: `Ask pi about ${this.app.vault.getName()}` });
 		const skills = this.suggest.commands.filter((c) => c.source === "skill" && OBSIDIAN_SKILLS.includes(c.name.replace(/^skill:/, "")));
@@ -1702,7 +1729,11 @@ export class ChatSession {
 	}
 
 	private renderNotice(text: string, isError = false): void {
-		this.addMessageEl(isError ? "pi-msg-notice is-error" : "pi-msg-notice").setText(text);
+		if (isError) {
+			this.addMessageEl("pi-msg-notice is-error").setText(text);
+		} else {
+			this.messagesEl.createDiv({ cls: "pi-msg pi-msg-notice", text });
+		}
 		this.keepScrolled();
 	}
 
