@@ -54,7 +54,9 @@ const LINKED: { key: keyof Inheritance; name: string; type: "file" | "dir" }[] =
 	{ key: "agents", name: "agents", type: "dir" },
 	{ key: "prompts", name: "prompts", type: "dir" },
 ];
-const SEEDED_SETTINGS = ["defaultProvider", "defaultModel", "defaultThinkingLevel", "enabledModels", "compaction", "shellCommandPrefix"];
+// Which models are in scope is not seeded: the panel reads that from this profile's settings
+// whichever profile the panel's pi uses (see readEnabledModelPatterns in main.ts).
+const SEEDED_SETTINGS = ["defaultProvider", "defaultModel", "defaultThinkingLevel", "compaction", "shellCommandPrefix"];
 
 async function readJson(path: string): Promise<Record<string, unknown>> {
 	try {

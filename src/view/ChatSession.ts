@@ -417,7 +417,7 @@ export class ChatSession {
 		this.queueModeBtn.addEventListener("click", () => this.setDeliveryMode("followUp"));
 
 		const bar = composer.createDiv({ cls: "pi-composer-bar" });
-		this.modelBtn = bar.createEl("button", { cls: "pi-pill clickable-icon", attr: { "aria-label": "Switch model" } });
+		this.modelBtn = bar.createEl("button", { cls: "pi-pill pi-model-btn clickable-icon", attr: { "aria-label": "Switch model" } });
 		this.modelBtn.addEventListener("click", () => void this.pickModel());
 		this.thinkingBtn = bar.createEl("button", { cls: "pi-pill clickable-icon", attr: { "aria-label": "Thinking level" } });
 		this.thinkingBtn.addEventListener("click", (evt) => void this.pickThinking(evt));
@@ -480,7 +480,15 @@ export class ChatSession {
 
 	private renderControls(): void {
 		const model = this.state?.model;
-		this.modelBtn.setText(model ? model.name || model.id : "No model");
+		this.modelBtn.empty();
+		if (model) {
+			this.modelBtn.createSpan({ text: model.name || model.id });
+			// The provider trails the name: two providers can offer the same model id.
+			this.modelBtn.createSpan({ cls: "pi-model-provider", text: model.provider });
+		} else {
+			this.modelBtn.setText("No model");
+		}
+		this.modelBtn.setAttr("aria-label", model ? `Switch model (${model.provider}/${model.id})` : "Switch model");
 		this.thinkingBtn.setText(this.state?.thinkingLevel ?? "");
 		this.thinkingBtn.toggle(Boolean(model?.reasoning));
 		this.host.changed(this);
@@ -1266,9 +1274,11 @@ export class ChatSession {
 			scoped,
 			this.state?.model ?? null,
 			this.plugin.settings.showAllModels,
-			async (model) => {
+			async (model, thinkingLevel) => {
 				try {
 					await this.client.setModel(model.provider, model.id);
+					// A scoped pattern can pin a level ("provider/model:high"); pi's own picker applies it too.
+					if (thinkingLevel) await this.client.setThinkingLevel(thinkingLevel);
 					this.state = await this.client.getState();
 					this.renderControls();
 				} catch (err) {

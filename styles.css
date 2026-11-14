@@ -883,6 +883,25 @@ textarea.pi-input:active {
 	background: var(--background-modifier-hover);
 	cursor: pointer;
 }
+/* The model pill carries two parts: the name, which gives way first, and the provider, which
+   stays whole because it is what tells two providers offering one model id apart. */
+.pi-model-btn {
+	display: inline-flex;
+	align-items: baseline;
+}
+.pi-model-btn > span:first-child {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.pi-model-provider {
+	flex: 0 0 auto;
+	color: var(--text-faint);
+}
+.pi-model-provider::before {
+	content: "·";
+	margin-right: 0.4em;
+}
 .pi-stats {
 	flex: 1;
 	min-width: 0;

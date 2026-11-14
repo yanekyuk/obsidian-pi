@@ -89,8 +89,8 @@ export class PiRemoteClient {
 		await this.call("trash_session", { path });
 	}
 
-	async readEnabledModels(): Promise<string[]> {
-		const res = await this.call<{ patterns: string[] }>("read_enabled_models");
+	async readEnabledModels(extraArgs?: string): Promise<string[]> {
+		const res = await this.call<{ patterns: string[] }>("read_enabled_models", { extraArgs });
 		return res.patterns;
 	}
 

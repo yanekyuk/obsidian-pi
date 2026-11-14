@@ -1,8 +1,8 @@
 import { App, FuzzySuggestModal, Modal, Notice, type FuzzyMatch } from "obsidian";
-import type { ScopedModels } from "../models";
-import type { Model } from "../rpc/types";
+import type { ScopedModel, ScopedModels } from "../models";
+import type { Model, ThinkingLevel } from "../rpc/types";
 
-type ModelChoice = { model: Model; unavailable?: undefined } | { model?: undefined; unavailable: string };
+type ModelChoice = ScopedModel | { model?: undefined; unavailable: string };
 
 // pi's model selector: the scoped models first (the short list from enabledModels), all models a
 // click or Tab away. Scoped entries pi can't use right now are listed too, so a missing provider
@@ -17,7 +17,7 @@ export class ModelPicker extends FuzzySuggestModal<ModelChoice> {
 		private scoped: ScopedModels,
 		private current: Model | null,
 		startWithAll: boolean,
-		private onPick: (model: Model) => void,
+		private onPick: (model: Model, thinkingLevel?: ThinkingLevel) => void,
 		private onViewChange: (showAll: boolean) => void,
 	) {
 		super(app);
@@ -55,7 +55,7 @@ export class ModelPicker extends FuzzySuggestModal<ModelChoice> {
 
 	getItems(): ModelChoice[] {
 		if (this.showAll) return this.all.map((model) => ({ model }));
-		return [...this.scoped.models.map((model) => ({ model })), ...this.scoped.unavailable.map((unavailable) => ({ unavailable }))];
+		return [...this.scoped.models, ...this.scoped.unavailable.map((unavailable) => ({ unavailable }))];
 	}
 
 	getItemText(choice: ModelChoice): string {
@@ -64,16 +64,19 @@ export class ModelPicker extends FuzzySuggestModal<ModelChoice> {
 
 	renderSuggestion(match: FuzzyMatch<ModelChoice>, el: HTMLElement): void {
 		super.renderSuggestion(match, el);
-		const { model, unavailable } = match.item;
-		if (model && this.current && model.provider === this.current.provider && model.id === this.current.id) el.createSpan({ cls: "pi-model-note", text: "current" });
-		if (unavailable) {
+		const choice = match.item;
+		if (!choice.model) {
 			el.addClass("pi-model-unavailable");
 			el.createSpan({ cls: "pi-model-note", text: "not available" });
+			return;
 		}
+		if (this.current && choice.model.provider === this.current.provider && choice.model.id === this.current.id) el.createSpan({ cls: "pi-model-note", text: "current" });
+		// A pattern can pin a thinking level ("provider/model:high"); picking that model sets it.
+		if (choice.thinkingLevel) el.createSpan({ cls: "pi-model-note", text: `thinking ${choice.thinkingLevel}` });
 	}
 
 	onChooseItem(choice: ModelChoice): void {
-		if (choice.model) return this.onPick(choice.model);
+		if (choice.model) return this.onPick(choice.model, choice.thinkingLevel);
 		new Notice(`pi has no model for "${choice.unavailable}" right now. Its provider may come from a package that isn't installed for the panel's pi (Settings → Extensions → Packages), or you aren't logged in to it.`, 10000);
 	}
 }

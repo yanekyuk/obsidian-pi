@@ -14,7 +14,7 @@ import { StatusBar } from "./statusBar";
 import { linkedSession, resolveLinked, sessionDirs } from "./noteLink";
 import { resolveEnv } from "./env";
 import { unusableMcpServers } from "./mcp";
-import { readEnabledModels } from "./models";
+import { modelsFlagPatterns, readEnabledModels } from "./models";
 import { sharedPiEnvironment } from "./piEnvironment";
 import { buildSystemPrompt } from "./prompt";
 import { PiRemoteClient } from "./remote/client";
@@ -186,7 +186,7 @@ export default class PiAgentPlugin extends Plugin {
 			this.remoteServer = new PiRemoteServer({
 				vaultName: () => this.app.vault.getName(),
 				vaultPath: () => this.vaultPath,
-				panelSettingsFile: () => this.panelSettingsFile,
+				enabledModelPatterns: (extraArgs) => this.readEnabledModelPatterns(extraArgs),
 				sessionDirectories: () => this.sessionDirectories(),
 				lastSessionFile: () => this.settings.lastSessionFile,
 				heldSessionFiles: () => this.heldSessionFiles(),
@@ -226,9 +226,17 @@ export default class PiAgentPlugin extends Plugin {
 		this.cachedAdvisorModel = modelKey ?? undefined;
 	}
 
-	async readEnabledModelPatterns(): Promise<string[]> {
-		if (this.isRemote) return this.remoteClient.readEnabledModels().catch(() => []);
-		return readEnabledModels(this.panelSettingsFile);
+	// The scoped-models list pi works from. It is the terminal profile's, whatever the panel's own
+	// separation is: which models are in scope is a choice made once in the terminal, and a copy in
+	// ~/.pi/harness would drift from it. A trusted vault's own settings still override it, and
+	// `--models` in Extra arguments beats both, as each does in pi.
+	async readEnabledModelPatterns(extraArgs = this.settings.extraArgs): Promise<string[]> {
+		if (this.isRemote) return this.remoteClient.readEnabledModels(extraArgs).catch(() => []);
+		const fromFlag = modelsFlagPatterns(extraArgs);
+		if (fromFlag) return fromFlag;
+		const layers = [join(USER_AGENT_DIR, "settings.json")];
+		if (await this.vaultIsTrusted()) layers.push(this.vaultSettingsFile);
+		return readEnabledModels(...layers);
 	}
 
 	async installedPackages(): Promise<InstalledPackage[]> {
@@ -398,6 +406,11 @@ export default class PiAgentPlugin extends Plugin {
 		return join(this.vaultPath, ".pi", "settings.json");
 	}
 
+	// The profile whose trust.json holds the decision about this vault.
+	private get trustFile(): string {
+		return join(this.settings.isolate ? HARNESS_AGENT_DIR : USER_AGENT_DIR, "trust.json");
+	}
+
 	// The environment every pi process the plugin starts uses: chats, side questions, and package inspection.
 	private async piEnv(): Promise<NodeJS.ProcessEnv> {
 		const env = sharedPiEnvironment(await resolveEnv());
@@ -548,6 +561,13 @@ export default class PiAgentPlugin extends Plugin {
 
 		if (model) args.push("--model", model);
 		if (sessionFile) args.push("--session", sessionFile);
+		// pi resolves its own scope from --models or its profile's enabledModels, and startup
+		// selection and Ctrl+P cycling follow it. The panel's scope comes from the terminal
+		// profile (readEnabledModelPatterns), so pi is handed the same list and the two agree.
+		if (!modelsFlagPatterns(extraArgs)) {
+			const scope = await this.readEnabledModelPatterns(extraArgs);
+			if (scope.length) args.push("--models", scope.join(","));
+		}
 
 		const env = await this.piEnv();
 		const skillDirs = s.extraSkillPaths
@@ -569,7 +589,7 @@ export default class PiAgentPlugin extends Plugin {
 			const entries = [...(await readPackageEntries(this.panelSettingsFile)), ...(await readPackageEntries(this.vaultSettingsFile))];
 			const narrowed = new Set(entries.filter((entry) => !loadsAllSkills(entry)).map(sourceOf));
 			skillDirs.unshift(...packages.filter((pkg) => !narrowed.has(pkg.source)).map((pkg) => join(pkg.path, "skills")));
-			if (await this.vaultIsTrusted(env)) skillDirs.push(join(vault, ".pi", "skills"), join(vault, ".agents", "skills"));
+			if (await this.vaultIsTrusted()) skillDirs.push(join(vault, ".pi", "skills"), join(vault, ".agents", "skills"));
 			if (s.inherit.skills) skillDirs.push(join(homedir(), ".agents", "skills"), join(USER_AGENT_DIR, "skills"));
 			// The flag belongs to the adapter; pi refuses flags nobody registered.
 			const mcpConfig = join(vault, ".mcp.json");
@@ -588,10 +608,15 @@ export default class PiAgentPlugin extends Plugin {
 		return { binary: s.piPath, args, cwd: vault, env };
 	}
 
-	private async vaultIsTrusted(env: NodeJS.ProcessEnv): Promise<boolean> {
+	// pi counts a decision about a parent folder as covering the vault, and the nearest decision
+	// wins; prepareAgentDir carries the same rule into an isolated profile.
+	private async vaultIsTrusted(): Promise<boolean> {
 		try {
-			const trust = JSON.parse(await fs.readFile(join(env.PI_CODING_AGENT_DIR ?? "", "trust.json"), "utf8")) as Record<string, unknown>;
-			return trust[resolve(this.vaultPath)] === true;
+			const decisions = JSON.parse(await fs.readFile(this.trustFile, "utf8")) as Record<string, unknown>;
+			for (let dir = resolve(this.vaultPath); ; dir = dirname(dir)) {
+				if (dir in decisions) return decisions[dir] === true;
+				if (dirname(dir) === dir) return false;
+			}
 		} catch {
 			return false;
 		}

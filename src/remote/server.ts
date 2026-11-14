@@ -6,7 +6,6 @@ import { join, resolve } from "path";
 import { StringDecoder } from "string_decoder";
 import { readAdvisorConfig, writeAdvisorConfig } from "../advisor";
 import { unusableMcpServers } from "../mcp";
-import { readEnabledModels } from "../models";
 import { resolveLinked } from "../noteLink";
 import type { InstalledPackage } from "../requirements";
 import type { PiSpawnOptions } from "../rpc/PiRpcClient";
@@ -32,7 +31,8 @@ export interface RemoteSessionOverrides {
 export interface RemoteServerHost {
 	vaultName(): string;
 	vaultPath(): string;
-	panelSettingsFile(): string;
+	// The scoped-model patterns pi works from, the terminal profile's unless extraArgs names its own.
+	enabledModelPatterns(extraArgs?: string): Promise<string[]>;
 	sessionDirectories(): string[];
 	lastSessionFile(): string;
 	heldSessionFiles(): string[];
@@ -269,8 +269,10 @@ export class PiRemoteServer {
 				this.host.onSessionsChanged?.();
 				return { ok: true };
 			}
-			case "read_enabled_models":
-				return { patterns: await readEnabledModels(this.host.panelSettingsFile()) };
+			case "read_enabled_models": {
+				const extraArgs = typeof payload.extraArgs === "string" ? payload.extraArgs : undefined;
+				return { patterns: await this.host.enabledModelPatterns(extraArgs) };
+			}
 			case "read_advisor":
 				return { config: readAdvisorConfig() };
 			case "write_advisor": {
