@@ -7,6 +7,8 @@ import type PiAgentPlugin from "../main";
 import { hasLegacyMcpCommand, probeMcp, vaultMcpServers } from "../mcp";
 import { readActiveContext, rewordMessage, splitContext, withContext } from "../prompt";
 import { findRequired, manualInstallCommands, OBSIDIAN_SKILLS, SKILLS_PACKAGE } from "../requirements";
+import { AcpClient } from "../rpc/AcpClient";
+import type { AgentBackend, AgentClient } from "../rpc/AgentClient";
 import { PiRpcClient } from "../rpc/PiRpcClient";
 import type { AgentMessage, AssistantMessageEvent, BranchSummaryMessage, ExtensionUiRequest, ImageContent, RpcEvent, SessionEntry, SessionState, SlashCommand, ToolCallContent, UserMessage } from "../rpc/types";
 import { contentText } from "../sessions";
@@ -90,7 +92,8 @@ export interface SessionHost {
 // Tabs that aren't on screen keep running; the panel shows one at a time.
 export class ChatSession {
 	readonly el: HTMLElement;
-	private client = new PiRpcClient();
+	readonly backend: AgentBackend;
+	private client: AgentClient;
 	// Owns the rendered markdown, so closing the tab lets go of it.
 	private component = new Component();
 	private renderHost: RenderHost;
@@ -164,8 +167,10 @@ export class ChatSession {
 	constructor(
 		parent: HTMLElement,
 		private host: SessionHost,
-		initial: { sessionFile: string | null; title?: string },
+		initial: { sessionFile: string | null; title?: string; backend?: AgentBackend },
 	) {
+		this.backend = initial.backend ?? (initial.sessionFile?.startsWith("acp:") ? "acp" : host.plugin.settings.backend);
+		this.client = this.backend === "acp" ? new AcpClient() : new PiRpcClient();
 		this.sessionFile = initial.sessionFile;
 		this.savedTitle = initial.title ?? "";
 		this.shareNote = host.plugin.settings.includeActiveNote;
@@ -490,7 +495,7 @@ export class ChatSession {
 		}
 		this.modelBtn.setAttr("aria-label", model ? `Switch model (${model.provider}/${model.id})` : "Switch model");
 		this.thinkingBtn.setText(this.state?.thinkingLevel ?? "");
-		this.thinkingBtn.toggle(Boolean(model?.reasoning));
+		this.thinkingBtn.toggle(this.client.capabilities.thinkingLevels && Boolean(model?.reasoning));
 		this.host.changed(this);
 	}
 
@@ -521,11 +526,11 @@ export class ChatSession {
 		if (!this.sendBtn) return;
 		const waiting = this.busy || this.compacting;
 		const hasDraft = this.inputEl.value.trim() !== "" || this.attachments.count > 0;
-		this.deliveryModesEl.toggle(waiting);
+		this.deliveryModesEl.toggle(this.client.capabilities.queueing && waiting);
 		this.steerModeBtn.setAttr("aria-pressed", this.deliveryMode === "steer" ? "true" : "false");
 		this.queueModeBtn.setAttr("aria-pressed", this.deliveryMode === "followUp" ? "true" : "false");
 		// At rest only Send appears. While pi works Stop takes its place until a draft is ready.
-		this.branchBtn.toggle(!waiting && this.hasConversation);
+		this.branchBtn.toggle(this.client.capabilities.branching && !waiting && this.hasConversation);
 		this.sendBtn.toggle(!this.busy || hasDraft);
 		this.renderBranchBar();
 		if (this.compacting) {
@@ -670,26 +675,33 @@ export class ChatSession {
 			);
 			return;
 		}
-		this.setActivity("Starting pi…");
+		this.setActivity(this.backend === "acp" ? "Starting Antigravity (agy acp)…" : "Starting pi…");
 		try {
 			const target = session ?? this.resumeTarget();
 			this.sessionFile = target;
 			if (this.state) this.state.sessionFile = target ?? undefined;
-			await this.client.start(await this.plugin.buildSpawnOptions(target));
+			await this.client.start(await this.plugin.buildSpawnOptions(target, this.backend));
 			await this.syncSession();
-			const fromPi = (await this.client.getCommands()).filter((c) => c.name !== TREE_COMMAND);
-			this.suggest.commands = [...PANEL_COMMANDS.filter((c) => !fromPi.some((p) => p.name === c.name)), ...fromPi];
+			const fromAgent = (await this.client.getCommands()).filter((c) => c.name !== TREE_COMMAND);
+			const panelCmds = this.client.capabilities.compaction ? PANEL_COMMANDS : PANEL_COMMANDS.filter((c) => c.name !== "compact");
+			this.suggest.commands = [...panelCmds.filter((c) => !fromAgent.some((p) => p.name === c.name)), ...fromAgent];
 			this.renderEmptyState();
-			void this.plugin.refreshAdvisorModel();
-			void this.checkMcp(true);
-			void this.connectMcp();
-			void this.showMissingPrerequisites();
+			if (this.backend === "pi") {
+				void this.plugin.refreshAdvisorModel();
+				void this.checkMcp(true);
+				void this.connectMcp();
+				void this.showMissingPrerequisites();
+			}
 		} catch (err) {
 			const missing = (err as NodeJS.ErrnoException).code === "ENOENT";
+			const bin = this.backend === "acp" ? this.plugin.settings.agyPath : this.plugin.settings.piPath;
+			const label = this.backend === "acp" ? "Antigravity (agy acp)" : "pi";
 			this.failed = true;
 			this.showBanner(
-				missing ? `Couldn't find "${this.plugin.settings.piPath}"` : "pi failed to start",
-				missing ? "Install pi, or set its full path in Settings → Pi Workbench." : String((err as Error).message ?? err),
+				missing ? `Couldn't find "${bin}"` : `${label} failed to start`,
+				missing
+					? `Install ${label}, or set its full path in Settings → Pi Workbench.`
+					: String((err as Error).message ?? err),
 				{ label: "Retry", run: () => void this.restart() },
 			);
 		} finally {
@@ -873,7 +885,7 @@ export class ChatSession {
 			const parts = [percent == null ? null : `${Math.round(percent)}% context`, stats.cost > 0 ? `$${stats.cost.toFixed(2)}` : null];
 			this.statsEl.setText(parts.filter(Boolean).join(" · "));
 			// Offered once there is a context reading, i.e. once there is something to compact.
-			this.compactBtn.toggle(percent != null);
+			this.compactBtn.toggle(this.client.capabilities.compaction && percent != null);
 		} catch {
 			this.statsEl.setText("");
 			this.compactBtn.hide();
@@ -1267,7 +1279,7 @@ export class ChatSession {
 	private async pickModel(): Promise<void> {
 		if (!this.client.running) return;
 		const models = await this.client.getAvailableModels();
-		const scoped = scopeModels(await this.plugin.readEnabledModelPatterns(), models);
+		const scoped = scopeModels(this.backend === "acp" ? [] : await this.plugin.readEnabledModelPatterns(), models);
 		new ModelPicker(
 			this.app,
 			models,

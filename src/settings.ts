@@ -5,9 +5,14 @@ import { DEFAULT_INHERITANCE, type Inheritance } from "./agentDir";
 import { disabled, enabled, isDisabled, readPackageEntries, replacePackageEntry, sourceOf, type PackageEntry } from "./packages";
 import { DEFAULT_SERVER_PORT, discoverServerUrls, generateServerToken } from "./remote/ws";
 import { findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE } from "./requirements";
+import type { AgentBackend } from "./rpc/AgentClient";
 
 export interface PiAgentSettings {
+	backend: AgentBackend;
 	piPath: string;
+	agyPath: string;
+	agyArgs: string;
+	agySkipPermissions: boolean;
 	model: string;
 	extraSkillPaths: string;
 	includeActiveNote: boolean;
@@ -45,7 +50,11 @@ export interface PiAgentSettings {
 }
 
 export const DEFAULT_SETTINGS: PiAgentSettings = {
+	backend: "pi",
 	piPath: "pi",
+	agyPath: "agy",
+	agyArgs: "",
+	agySkipPermissions: true,
 	model: "",
 	extraSkillPaths: "",
 	includeActiveNote: true,
@@ -90,6 +99,56 @@ export class PiAgentSettingTab extends PluginSettingTab {
 		const hasLocal = this.plugin.hasLocalFs;
 
 		if (!hasLocal) this.renderRemoteClientSection(containerEl);
+
+		new Setting(containerEl).setName("Agent backend").setHeading();
+
+		new Setting(containerEl)
+			.setName("Default backend")
+			.setDesc("Choose whether new tabs use pi (--mode rpc) or Antigravity (agy acp). You can also open either backend from the panel menu.")
+			.addDropdown((d) =>
+				d
+					.addOption("pi", "pi")
+					.addOption("acp", "Antigravity (agy acp)")
+					.setValue(s.backend)
+					.onChange(async (v) => {
+						s.backend = v === "acp" ? "acp" : "pi";
+						await save();
+					}),
+			);
+
+		if (hasLocal) {
+			new Setting(containerEl).setName("Antigravity (agy acp)").setHeading();
+
+			new Setting(containerEl)
+				.setName("agy binary")
+				.setDesc("Command name or absolute path for the Antigravity CLI. Authenticate once in a terminal with: agy acp --login")
+				.addText((t) =>
+					t.setPlaceholder("agy").setValue(s.agyPath).onChange(async (v) => {
+						s.agyPath = v.trim() || "agy";
+						await save();
+					}),
+				);
+
+			new Setting(containerEl)
+				.setName("Skip tool permission prompts")
+				.setDesc("Pass --dangerously-skip-permissions to agy acp so tool calls run without confirmation, matching pi's behavior.")
+				.addToggle((t) =>
+					t.setValue(s.agySkipPermissions).onChange(async (v) => {
+						s.agySkipPermissions = v;
+						await save();
+					}),
+				);
+
+			new Setting(containerEl)
+				.setName("Extra agy acp arguments")
+				.setDesc('Appended to "agy acp", e.g. "--sandbox" or "--agent my-agent".')
+				.addText((t) =>
+					t.setValue(s.agyArgs).onChange(async (v) => {
+						s.agyArgs = v;
+						await save();
+					}),
+				);
+		}
 
 		new Setting(containerEl).setName("pi").setHeading();
 

@@ -1,5 +1,6 @@
 import { ItemView, Menu, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import type PiAgentPlugin from "../main";
+import type { AgentBackend } from "../rpc/AgentClient";
 import type { SessionSummary } from "../sessions";
 import { ChatSession, type SessionHost } from "./ChatSession";
 import { confirmAction } from "./modals";
@@ -68,7 +69,7 @@ export class ChatView extends ItemView {
 		const kept = this.tabs.filter((tab) => tab.heldSessionFile !== null);
 		return {
 			...super.getState(),
-			tabs: kept.map((tab) => ({ sessionFile: tab.heldSessionFile, title: tab.title })),
+			tabs: kept.map((tab) => ({ sessionFile: tab.heldSessionFile, title: tab.title, backend: tab.backend })),
 			active: this.active ? kept.indexOf(this.active) : 0,
 		};
 	}
@@ -132,6 +133,8 @@ export class ChatView extends ItemView {
 	private addMenuItems(menu: Menu): void {
 		const tab = this.current();
 		menu.addItem((i) => i.setTitle("New tab").setIcon("lucide-file-plus").onClick(() => this.newTab()));
+		menu.addItem((i) => i.setTitle("New pi tab").setIcon("terminal").onClick(() => this.newTab("pi")));
+		menu.addItem((i) => i.setTitle("New Antigravity (ACP) tab").setIcon("sparkles").onClick(() => this.newTab("acp")));
 		if (this.tabs.length > 1) menu.addItem((i) => i.setTitle("Close tab").setIcon("x").onClick(() => void this.closeTab(tab)));
 		menu.addSeparator();
 		menu.addItem((i) => i.setTitle("Rename session…").setIcon("pencil").onClick(() => void tab.renameCurrent()));
@@ -260,7 +263,7 @@ export class ChatView extends ItemView {
 		return this.active as ChatSession;
 	}
 
-	private addTab(initial: { sessionFile: string | null; title?: string }, activate = true): ChatSession {
+	private addTab(initial: { sessionFile: string | null; title?: string; backend?: AgentBackend }, activate = true): ChatSession {
 		const tab = new ChatSession(this.tabsEl, this.sessionHost, initial);
 		this.tabs.push(tab);
 		if (activate) this.activate(tab);
@@ -306,11 +309,14 @@ export class ChatView extends ItemView {
 		this.activate(tab);
 	}
 
-	// A new tab beside the ones that are open. An empty one is reused: two would be no use.
-	newTab(): void {
+	// A new tab beside the ones that are open. An empty one with the same backend is reused.
+	newTab(backend?: AgentBackend): void {
 		this.init();
-		const empty = (this.active?.isEmpty ? this.active : null) ?? this.tabs.find((tab) => tab.isEmpty);
-		this.activate(empty ?? this.addTab({ sessionFile: null }, false));
+		const targetBackend = backend ?? this.plugin.settings.backend;
+		const empty =
+			(this.active?.isEmpty && this.active.backend === targetBackend ? this.active : null) ??
+			this.tabs.find((tab) => tab.isEmpty && tab.backend === targetBackend);
+		this.activate(empty ?? this.addTab({ sessionFile: null, backend: targetBackend }, false));
 	}
 
 	// Closing stops that tab's pi. The conversation stays in the session history.

@@ -7,6 +7,7 @@ import { DEFAULT_INHERITANCE, HARNESS_AGENT_DIR, USER_AGENT_DIR, prepareAgentDir
 import { loadsAllSkills, readPackageEntries, sourceOf } from "./packages";
 import { MCP_ADAPTER, Requirements, type InstalledPackage } from "./requirements";
 import { BrowserControl } from "./browser";
+import { ObsidianMcpBridge } from "./mcpBridge";
 import { ObsidianControl } from "./obsidianControl";
 import { VaultSearch } from "./search/VaultSearch";
 import { extractBundledFiles } from "./bundled";
@@ -20,6 +21,7 @@ import { buildSystemPrompt } from "./prompt";
 import { PiRemoteClient } from "./remote/client";
 import { PiRemoteServer, type RemoteSessionOverrides } from "./remote/server";
 import { DEFAULT_SERVER_PORT, discoverServerUrls, generateServerToken } from "./remote/ws";
+import type { AcpSpawnOptions, AgentBackend, AgentSpawnOptions } from "./rpc/AgentClient";
 import type { PiSpawnOptions } from "./rpc/PiRpcClient";
 import { listSessions, type SessionSummary } from "./sessions";
 import { DEFAULT_SETTINGS, PiAgentSettingTab, type PiAgentSettings } from "./settings";
@@ -43,6 +45,10 @@ export default class PiAgentPlugin extends Plugin {
 	browser = new BrowserControl(this.app);
 	vaultSearch = new VaultSearch(this.app);
 	obsidian = new ObsidianControl(this.app, () => this.settings.commandAllowlist, this.vaultSearch);
+	mcpBridge = new ObsidianMcpBridge(this.obsidian, this.browser, () => ({
+		obsidianControl: this.settings.obsidianControl,
+		browserControl: this.settings.browserControl,
+	}));
 	statusBar!: StatusBar;
 
 	requirements = new Requirements({ piCommand: () => this.piCommand() });
@@ -156,6 +162,7 @@ export default class PiAgentPlugin extends Plugin {
 
 
 	onunload(): void {
+		this.mcpBridge.stop();
 		void this.remoteServer?.stop();
 		this.remoteServer = null;
 	}
@@ -259,6 +266,7 @@ export default class PiAgentPlugin extends Plugin {
 
 	canRestoreTab(sessionFile: string, except?: ChatSession): boolean {
 		if (!sessionFile || this.isSessionHeld(sessionFile, except)) return false;
+		if (sessionFile.startsWith("acp:")) return true;
 		return this.isRemote ? true : existsSync(sessionFile);
 	}
 
@@ -531,7 +539,8 @@ export default class PiAgentPlugin extends Plugin {
 		return leaf.view;
 	}
 
-	async buildSpawnOptions(sessionFile: string | null): Promise<PiSpawnOptions> {
+	async buildSpawnOptions(sessionFile: string | null, backend: AgentBackend = this.settings.backend): Promise<AgentSpawnOptions> {
+		if (backend === "acp") return this.buildAcpSpawnOptions(sessionFile);
 		if (this.isRemote) {
 			const s = this.settings;
 			return this.remoteClient.buildSpawnOptions(sessionFile, {
@@ -544,6 +553,27 @@ export default class PiAgentPlugin extends Plugin {
 			});
 		}
 		return this.buildLocalSpawnOptions(sessionFile);
+	}
+
+	private async buildAcpSpawnOptions(sessionFile: string | null): Promise<AcpSpawnOptions> {
+		if (this.isRemote) {
+			throw new Error("Antigravity (agy acp) is only supported on desktop with local filesystem access.");
+		}
+		const s = this.settings;
+		const env = await resolveEnv();
+		const mcp = await this.mcpBridge.stdioConfig();
+		const sessionId = sessionFile?.startsWith("acp:") ? sessionFile.slice(4) : null;
+		return {
+			binary: s.agyPath,
+			args: s.agyArgs.split(/\s+/).filter(Boolean),
+			cwd: this.vaultPath,
+			env,
+			sessionId,
+			model: s.model || undefined,
+			systemPromptAppend: buildSystemPrompt(this.app.vault.getName(), s.systemPromptAddendum),
+			skipPermissions: s.agySkipPermissions,
+			mcpServers: mcp ? [mcp] : [],
+		};
 	}
 
 	private async buildLocalSpawnOptions(sessionFile: string | null, overrides?: RemoteSessionOverrides): Promise<PiSpawnOptions> {

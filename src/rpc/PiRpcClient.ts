@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import { StringDecoder } from "string_decoder";
+import type { AgentBackend, AgentCapabilities, AgentClient } from "./AgentClient";
 import type {
 	AgentMessage,
 	ImageContent,
@@ -61,7 +62,16 @@ const STALE_SOCKET_MS = 25_000;
 const PING_TIMEOUT_MS = 3_000;
 const STDERR_TAIL = 4000;
 
-export class PiRpcClient {
+export class PiRpcClient implements AgentClient {
+	readonly backend: AgentBackend = "pi";
+	readonly capabilities: AgentCapabilities = {
+		queueing: true,
+		branching: true,
+		compaction: true,
+		sessionFiles: true,
+		thinkingLevels: true,
+		extensionUi: true,
+	};
 	private readonly clientId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 	private proc: ChildProcessWithoutNullStreams | null = null;
 	private ws: WebSocket | null = null;
