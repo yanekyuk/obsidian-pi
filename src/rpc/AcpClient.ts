@@ -86,9 +86,7 @@ export class AcpClient implements AgentClient {
 	// Per-turn streaming accumulators for translating ACP updates into pi-workbench events.
 	private textBlockIndex: number | null = null;
 	private thinkingBlockIndex: number | null = null;
-	private nextBlockIndex = 0;
-	private activeText = "";
-	private activeThinking = "";
+	private turnBlocks: ContentBlock[] = [];
 	private activeTools = new Map<string, TrackedToolCall>();
 
 	get running(): boolean {
@@ -418,14 +416,16 @@ export class AcpClient implements AgentClient {
 		if (kind === "agent_message_chunk") {
 			const text = this.extractChunkText(update.content);
 			if (!text) return;
+			this.closeThinkingBlock();
 			if (this.textBlockIndex === null) {
-				this.textBlockIndex = this.nextBlockIndex++;
+				this.textBlockIndex = this.turnBlocks.length;
+				this.turnBlocks.push({ type: "text", text: "" });
 				this.emit({
 					type: "message_update",
 					assistantMessageEvent: { type: "text_start", contentIndex: this.textBlockIndex },
 				});
 			}
-			this.activeText += text;
+			(this.turnBlocks[this.textBlockIndex] as { type: "text"; text: string }).text += text;
 			this.emit({
 				type: "message_update",
 				assistantMessageEvent: { type: "text_delta", contentIndex: this.textBlockIndex, delta: text },
@@ -436,14 +436,16 @@ export class AcpClient implements AgentClient {
 		if (kind === "agent_thought_chunk") {
 			const text = this.extractChunkText(update.content);
 			if (!text) return;
+			this.closeTextBlock();
 			if (this.thinkingBlockIndex === null) {
-				this.thinkingBlockIndex = this.nextBlockIndex++;
+				this.thinkingBlockIndex = this.turnBlocks.length;
+				this.turnBlocks.push({ type: "thinking", thinking: "" });
 				this.emit({
 					type: "message_update",
 					assistantMessageEvent: { type: "thinking_start", contentIndex: this.thinkingBlockIndex },
 				});
 			}
-			this.activeThinking += text;
+			(this.turnBlocks[this.thinkingBlockIndex] as { type: "thinking"; thinking: string }).thinking += text;
 			this.emit({
 				type: "message_update",
 				assistantMessageEvent: { type: "thinking_delta", contentIndex: this.thinkingBlockIndex, delta: text },
@@ -452,6 +454,8 @@ export class AcpClient implements AgentClient {
 		}
 
 		if (kind === "tool_call") {
+			this.closeThinkingBlock();
+			this.closeTextBlock();
 			const toolCallId = String(update.toolCallId ?? `tool-${Date.now()}`);
 			const toolName = String(update.title || update.kind || "tool");
 			const args = (update.rawInput && typeof update.rawInput === "object" ? update.rawInput : {}) as Record<string, unknown>;
@@ -571,6 +575,26 @@ export class AcpClient implements AgentClient {
 		this.sendRaw({ jsonrpc: "2.0", method, params });
 	}
 
+	private closeTextBlock(): void {
+		if (this.textBlockIndex === null) return;
+		const block = this.turnBlocks[this.textBlockIndex] as { type: "text"; text: string } | undefined;
+		this.emit({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_end", contentIndex: this.textBlockIndex, content: block?.text ?? "" },
+		});
+		this.textBlockIndex = null;
+	}
+
+	private closeThinkingBlock(): void {
+		if (this.thinkingBlockIndex === null) return;
+		const block = this.turnBlocks[this.thinkingBlockIndex] as { type: "thinking"; thinking: string } | undefined;
+		this.emit({
+			type: "message_update",
+			assistantMessageEvent: { type: "thinking_end", contentIndex: this.thinkingBlockIndex, content: block?.thinking ?? "" },
+		});
+		this.thinkingBlockIndex = null;
+	}
+
 	async prompt(message: string, opts: { streamingBehavior?: "steer" | "followUp"; images?: ImageContent[] } = {}): Promise<void> {
 		if (!this.sessionId) throw new Error("No active ACP session.");
 		const promptBlocks: Record<string, unknown>[] = [{ type: "text", text: message }];
@@ -580,17 +604,18 @@ export class AcpClient implements AgentClient {
 			userContent.push(img);
 		}
 
-		this.messages.push({ role: "user", content: userContent, timestamp: Date.now() });
+		const userMessage: AgentMessage = { role: "user", content: userContent, timestamp: Date.now() };
+		this.messages.push(userMessage);
 		this.isStreaming = true;
 		this.textBlockIndex = null;
 		this.thinkingBlockIndex = null;
-		this.nextBlockIndex = 0;
-		this.activeText = "";
-		this.activeThinking = "";
+		this.turnBlocks = [];
 		this.activeTools.clear();
 
 		this.emit({ type: "agent_start" });
 		this.emit({ type: "turn_start" });
+		this.emit({ type: "message_start", message: userMessage });
+		this.emit({ type: "message_end", message: userMessage });
 		const assistantStart: AgentMessage = { role: "assistant", content: [], timestamp: Date.now() };
 		this.emit({ type: "message_start", message: assistantStart });
 
@@ -608,24 +633,11 @@ export class AcpClient implements AgentClient {
 			throw err;
 		} finally {
 			this.isStreaming = false;
-			if (this.thinkingBlockIndex !== null) {
-				this.emit({
-					type: "message_update",
-					assistantMessageEvent: { type: "thinking_end", contentIndex: this.thinkingBlockIndex, content: this.activeThinking },
-				});
-			}
-			if (this.textBlockIndex !== null) {
-				this.emit({
-					type: "message_update",
-					assistantMessageEvent: { type: "text_end", contentIndex: this.textBlockIndex, content: this.activeText },
-				});
-			}
-			const finalContent: ContentBlock[] = [];
-			if (this.activeThinking) finalContent.push({ type: "thinking", thinking: this.activeThinking });
-			if (this.activeText) finalContent.push({ type: "text", text: this.activeText });
+			this.closeThinkingBlock();
+			this.closeTextBlock();
 			const finalAssistant: AgentMessage = {
 				role: "assistant",
-				content: finalContent,
+				content: this.turnBlocks,
 				stopReason,
 				errorMessage,
 				timestamp: Date.now(),
@@ -633,6 +645,7 @@ export class AcpClient implements AgentClient {
 			this.messages.push(finalAssistant);
 			this.emit({ type: "message_end", message: finalAssistant });
 			this.emit({ type: "agent_end" });
+			this.emit({ type: "agent_settled", aborted: stopReason === "aborted" });
 		}
 	}
 

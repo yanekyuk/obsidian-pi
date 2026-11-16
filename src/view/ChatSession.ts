@@ -1710,7 +1710,7 @@ export class ChatSession {
 			}
 		}
 		if (text) new MarkdownBlock(this.renderHost, el.createDiv({ cls: "pi-text markdown-rendered" })).set(text);
-		if (editable && message.timestamp !== undefined) {
+		if (editable && this.client.capabilities.branching && message.timestamp !== undefined) {
 			const edit = el.createDiv({ cls: "pi-msg-actions" }).createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Edit and run again from here" } });
 			setIcon(edit, "pencil");
 			edit.addEventListener("click", () => editInPlace(el, text, (edited) => this.rerunFrom(message, edited)));
