@@ -91,13 +91,13 @@ export default class PiAgentPlugin extends Plugin {
 		this.addChild(this.vaultSearch);
 		this.registerView(VIEW_TYPE_PI, (leaf) => new ChatView(leaf, this));
 		this.app.workspace.onLayoutReady(() => void this.adoptLegacyPanels());
-		this.registerHoverLinkSource(VIEW_TYPE_PI, { display: "Pi Workbench", defaultMod: true });
+		this.registerHoverLinkSource(VIEW_TYPE_PI, { display: "Agent Workbench", defaultMod: true });
 		this.addSettingTab(new PiAgentSettingTab(this.app, this));
-		this.addRibbonIcon("pi", "Open pi", () => void this.activateView());
+		this.addRibbonIcon("pi", "Open Agent Workbench", () => void this.activateView());
 		this.statusBar = new StatusBar(this, () => this.chatViews(), (tab) => void this.chatViews().find((view) => view.allTabs().includes(tab))?.revealTab(tab));
 
 		// obsidian://pi-workbench?prompt=…  puts the words in the composer of a new tab; &send=1 sends
-		// them; &note=Folder/Note opens pi for that note; &session=<file name> opens that session.
+		// them; &note=Folder/Note opens chat for that note; &session=<file name> opens that session.
 		this.registerObsidianProtocolHandler("pi-workbench", (params) => void this.handleUri(params));
 
 		this.addCommand({
@@ -113,9 +113,11 @@ export default class PiAgentPlugin extends Plugin {
 			callback: async () => (await this.activateView())?.newSession(),
 		});
 		this.addCommand({ id: "new-tab", name: "New tab", callback: async () => (await this.activateView())?.newTab() });
+		this.addCommand({ id: "new-pi-tab", name: "New Pi tab", callback: async () => (await this.activateView())?.newTab("pi") });
+		this.addCommand({ id: "new-agy-tab", name: "New Agy tab", callback: async () => (await this.activateView())?.newTab("acp") });
 		this.addCommand({
 			id: "open-for-note",
-			name: "Open pi for this note",
+			name: "Open chat for this note",
 			checkCallback: (checking) => {
 				const file = this.app.workspace.getActiveFile();
 				if (!(file instanceof TFile) || file.extension !== "md") return false;
@@ -126,7 +128,7 @@ export default class PiAgentPlugin extends Plugin {
 		this.registerEvent(
 			this.app.workspace.on("file-menu", (menu, file) => {
 				if (!(file instanceof TFile) || file.extension !== "md") return;
-				menu.addItem((i) => i.setTitle("Open pi for this note").setIcon("pi").onClick(() => void this.openForNote(file)));
+				menu.addItem((i) => i.setTitle("Open chat for this note").setIcon("pi").onClick(() => void this.openForNote(file)));
 			}),
 		);
 		this.addCommand({ id: "export-session", name: "Export conversation to a note", callback: async () => (await this.activateView())?.current().exportToNote() });
@@ -145,7 +147,7 @@ export default class PiAgentPlugin extends Plugin {
 		});
 		this.addCommand({
 			id: "restart",
-			name: "Reload pi",
+			name: "Reload agent",
 			callback: async () => (await this.activateView())?.reload(),
 		});
 		this.addCommand({
@@ -213,7 +215,7 @@ export default class PiAgentPlugin extends Plugin {
 				token: this.settings.serverToken,
 			});
 		} catch (err) {
-			new Notice(`Couldn't start the Pi Workbench mobile server: ${(err as Error).message}`);
+			new Notice(`Couldn't start the Agent Workbench mobile server: ${(err as Error).message}`);
 		}
 	}
 
@@ -480,7 +482,7 @@ export default class PiAgentPlugin extends Plugin {
 		if (!view) return;
 		if (params.session) {
 			const path = await this.resolveLinkedSession(params.session);
-			if (!path) return void new Notice("No such pi session here.");
+			if (!path) return void new Notice("No such session here.");
 			await view.openSession(path);
 		} else if (params.note) {
 			const file = this.app.vault.getAbstractFileByPath(params.note.endsWith(".md") ? params.note : `${params.note}.md`);
@@ -557,7 +559,7 @@ export default class PiAgentPlugin extends Plugin {
 
 	private async buildAcpSpawnOptions(sessionFile: string | null): Promise<AcpSpawnOptions> {
 		if (this.isRemote) {
-			throw new Error("Antigravity (agy acp) is only supported on desktop with local filesystem access.");
+			throw new Error("Agy is only supported on desktop with local filesystem access.");
 		}
 		const s = this.settings;
 		const env = await resolveEnv();

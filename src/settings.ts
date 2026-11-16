@@ -104,11 +104,11 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Default backend")
-			.setDesc("Choose whether new tabs use pi (--mode rpc) or Antigravity (agy acp). You can also open either backend from the panel menu.")
+			.setDesc("Choose whether new tabs use Pi (pi --mode rpc) or Agy (agy acp). You can also open either backend from the panel menu.")
 			.addDropdown((d) =>
 				d
-					.addOption("pi", "pi")
-					.addOption("acp", "Antigravity (agy acp)")
+					.addOption("pi", "Pi")
+					.addOption("acp", "Agy")
 					.setValue(s.backend)
 					.onChange(async (v) => {
 						s.backend = v === "acp" ? "acp" : "pi";
@@ -116,12 +116,32 @@ export class PiAgentSettingTab extends PluginSettingTab {
 					}),
 			);
 
+		new Setting(containerEl)
+			.setName("Default model")
+			.setDesc('Model name or pattern, e.g. "anthropic/claude-sonnet-5" or "*sonnet*:high". Leave empty to use the agent\'s default.')
+			.addText((t) =>
+				t.setValue(s.model).onChange(async (v) => {
+					s.model = v.trim();
+					await save();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Resume last session")
+			.setDesc("Each chat tab reopens the session it had last time. Turn off to start fresh whenever an agent starts.")
+			.addToggle((t) =>
+				t.setValue(s.resumeLastSession).onChange(async (v) => {
+					s.resumeLastSession = v;
+					await save();
+				}),
+			);
+
 		if (hasLocal) {
-			new Setting(containerEl).setName("Antigravity (agy acp)").setHeading();
+			new Setting(containerEl).setName("Agy").setHeading();
 
 			new Setting(containerEl)
-				.setName("agy binary")
-				.setDesc("Command name or absolute path for the Antigravity CLI. Authenticate once in a terminal with: agy acp --login")
+				.setName("Agy binary")
+				.setDesc("Command name or absolute path for the Agy CLI (agy acp). Authenticate once in a terminal with: agy acp --login")
 				.addText((t) =>
 					t.setPlaceholder("agy").setValue(s.agyPath).onChange(async (v) => {
 						s.agyPath = v.trim() || "agy";
@@ -131,7 +151,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 			new Setting(containerEl)
 				.setName("Skip tool permission prompts")
-				.setDesc("Pass --dangerously-skip-permissions to agy acp so tool calls run without confirmation, matching pi's behavior.")
+				.setDesc("Pass --dangerously-skip-permissions to agy acp so tool calls run without confirmation, matching Pi's behavior.")
 				.addToggle((t) =>
 					t.setValue(s.agySkipPermissions).onChange(async (v) => {
 						s.agySkipPermissions = v;
@@ -140,7 +160,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 				);
 
 			new Setting(containerEl)
-				.setName("Extra agy acp arguments")
+				.setName("Extra Agy arguments")
 				.setDesc('Appended to "agy acp", e.g. "--sandbox" or "--agent my-agent".')
 				.addText((t) =>
 					t.setValue(s.agyArgs).onChange(async (v) => {
@@ -150,11 +170,11 @@ export class PiAgentSettingTab extends PluginSettingTab {
 				);
 		}
 
-		new Setting(containerEl).setName("pi").setHeading();
+		new Setting(containerEl).setName("Pi").setHeading();
 
 		if (hasLocal) {
 			new Setting(containerEl)
-				.setName("pi binary")
+				.setName("Pi binary")
 				.setDesc("Command name or absolute path. Your login shell's PATH is used to resolve it.")
 				.addText((t) =>
 					t.setPlaceholder("pi").setValue(s.piPath).onChange(async (v) => {
@@ -165,31 +185,11 @@ export class PiAgentSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
-			.setName("Default model")
-			.setDesc('Pattern passed to --model, e.g. "anthropic/claude-sonnet-5" or "*sonnet*:high". Leave empty to use pi\'s default.')
-			.addText((t) =>
-				t.setValue(s.model).onChange(async (v) => {
-					s.model = v.trim();
-					await save();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Extra arguments")
+			.setName("Extra Pi arguments")
 			.setDesc('Appended to the pi command line, e.g. "--tools read,grep,find,ls" for a read-only agent.')
 			.addText((t) =>
 				t.setValue(s.extraArgs).onChange(async (v) => {
 					s.extraArgs = v;
-					await save();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Resume last session")
-			.setDesc("Each chat tab reopens the session it had last time. Turn off to start fresh whenever pi starts.")
-			.addToggle((t) =>
-				t.setValue(s.resumeLastSession).onChange(async (v) => {
-					s.resumeLastSession = v;
 					await save();
 				}),
 			);
@@ -200,8 +200,8 @@ export class PiAgentSettingTab extends PluginSettingTab {
 			new Setting(containerEl).setName("Inheritance").setHeading();
 
 			new Setting(containerEl)
-				.setName("Keep the panel's pi separate from your terminal pi")
-				.setDesc("Off by default: the panel shares your terminal pi's ~/.pi/agent profile. Turn on to use ~/.pi/harness and choose what to inherit below. The vault's own .pi folder loads either way once you have trusted it in pi. Reload pi after changing anything here.")
+				.setName("Keep the panel's Pi separate from your terminal Pi")
+				.setDesc("Off by default: the panel shares your terminal Pi's ~/.pi/agent profile. Turn on to use ~/.pi/harness and choose what to inherit below. The vault's own .pi folder loads either way once you have trusted it in Pi. Reload Pi after changing anything here.")
 				.addToggle((t) =>
 					t.setValue(s.isolate).onChange(async (v) => {
 						s.isolate = v;
@@ -245,8 +245,8 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		if (hasLocal) {
 			new Setting(containerEl)
-				.setName("Let pi use the web viewer")
-				.setDesc("Gives pi tools to open pages in Obsidian's web viewer, read them, click, type, take a screenshot and run scripts in them. You watch it happen in a tab. The web viewer keeps you logged in to sites, so pi acts there as you, and a page it reads can contain text that tries to steer it: leave this off unless you want it. Needs the Web viewer core plugin. Reload pi after changing this.")
+				.setName("Let agents use the web viewer")
+				.setDesc("Gives agents tools to open pages in Obsidian's web viewer, read them, click, type, take a screenshot and run scripts in them. You watch it happen in a tab. The web viewer keeps you logged in to sites, so the agent acts there as you, and a page it reads can contain text that tries to steer it: leave this off unless you want it. Needs the Web viewer core plugin. Reload after changing this.")
 				.addToggle((t) =>
 					t.setValue(s.browserControl).onChange(async (v) => {
 						s.browserControl = v;
@@ -256,8 +256,8 @@ export class PiAgentSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
-			.setName("Let pi use Obsidian")
-			.setDesc("Gives pi tools for what only the running app knows: ranked search of your notes, section by section, kept current as you edit; backlinks, tags, aliases and headings from the metadata cache, property edits that keep the YAML well-formed, opening a note for you, and the command palette. Reload pi after changing this.")
+			.setName("Let agents use Obsidian")
+			.setDesc("Gives agents tools for what only the running app knows: ranked search of your notes, section by section, kept current as you edit; backlinks, tags, aliases and headings from the metadata cache, property edits that keep the YAML well-formed, opening a note for you, and the command palette. Reload after changing this.")
 			.addToggle((t) =>
 				t.setValue(s.obsidianControl).onChange(async (v) => {
 					s.obsidianControl = v;
@@ -266,8 +266,8 @@ export class PiAgentSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Commands pi may run")
-			.setDesc("Obsidian command ids pi is allowed to run, one per line. * stands for anything: editor:* allows every editor command, * alone allows all of them. Leave empty to let pi list commands but run none. Find ids with the obsidian_commands tool or in Settings → Hotkeys.")
+			.setName("Commands agents may run")
+			.setDesc("Obsidian command ids agents are allowed to run, one per line. * stands for anything: editor:* allows every editor command, * alone allows all of them. Leave empty to let agents list commands but run none. Find ids with the obsidian_commands tool or in Settings → Hotkeys.")
 			.addTextArea((t) => {
 				t.setPlaceholder("editor:*\nworkspace:*\napp:reload").setValue(s.commandAllowlist);
 				t.inputEl.rows = 4;
@@ -279,7 +279,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		if (hasLocal) {
 			new Setting(containerEl)
-				.setName("Connect legacy MCP servers when pi starts")
+				.setName("Connect legacy MCP servers when Pi starts")
 				.setDesc("For pi-mcp-adapter and the vault's .mcp.json: connects available HTTP servers right away rather than waiting until something uses them. Pi's native MCP connects servers from .pi/mcp.json itself.")
 				.addToggle((t) =>
 					t.setValue(s.connectMcpOnStart).onChange(async (v) => {
@@ -294,7 +294,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 		if (hasLocal) {
 			new Setting(containerEl)
 				.setName("Extra skill folders")
-				.setDesc("One path per line, relative to the vault or absolute, e.g. .claude/skills. Skills in .pi/skills and .agents/skills are found by pi on its own.")
+				.setDesc("One path per line, relative to the vault or absolute, e.g. .claude/skills. Skills in .pi/skills and .agents/skills are found by Pi on its own.")
 				.addTextArea((t) =>
 					t.setValue(s.extraSkillPaths).onChange(async (v) => {
 						s.extraSkillPaths = v;
@@ -305,7 +305,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Share the active note")
-			.setDesc("Tell pi which note is open and what text is selected. Can be toggled per message in the composer.")
+			.setDesc("Tell the agent which note is open and what text is selected. Can be toggled per message in the composer.")
 			.addToggle((t) =>
 				t.setValue(s.includeActiveNote).onChange(async (v) => {
 					s.includeActiveNote = v;
@@ -315,7 +315,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Trim old tool output")
-			.setDesc("Before each reply, the model gets a one-line stand-in instead of the bulky output of tool calls from more than a few messages ago: notes read in full, fetched pages, screenshots. pi can run the tool again if it needs it. A conversation then goes longer before pi has to compact it. The session and the panel keep everything. Reload pi after changing this.")
+			.setDesc("Before each reply in Pi tabs, the model gets a one-line stand-in instead of the bulky output of tool calls from more than a few messages ago: notes read in full, fetched pages, screenshots. Pi can run the tool again if it needs it. A conversation then goes longer before Pi has to compact it. The session and the panel keep everything. Reload Pi after changing this.")
 			.addToggle((t) =>
 				t.setValue(s.trimToolOutput).onChange(async (v) => {
 					s.trimToolOutput = v;
@@ -354,7 +354,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		containerEl.createEl("p", {
 			cls: "setting-item-description",
-			text: "Changes to the pi section and to skills take effect the next time pi starts (the panel's ↻ button, or /reload).",
+			text: "Changes to backend settings and to skills take effect the next time a tab starts or reloads (the panel's ↻ button, or /reload).",
 		});
 	}
 
@@ -366,7 +366,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Host server for Obsidian Mobile")
-			.setDesc("Starts a WebSocket server inside desktop Obsidian so your phone can use this machine's pi over Tailscale.")
+			.setDesc("Starts a WebSocket server inside desktop Obsidian so your phone can use this machine's Pi over Tailscale.")
 			.addToggle((t) =>
 				t.setValue(s.serverEnabled).onChange(async (v) => {
 					s.serverEnabled = v;
@@ -445,7 +445,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 		const s = this.plugin.settings;
 		const save = () => this.plugin.saveSettings();
 
-		new Setting(containerEl).setName("Remote pi server").setHeading();
+		new Setting(containerEl).setName("Remote server").setHeading();
 
 		new Setting(containerEl)
 			.setName("Server URL")
@@ -459,7 +459,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Access token")
-			.setDesc("The access token from Settings → Pi Workbench → Mobile server on the desktop machine.")
+			.setDesc("The access token from Settings → Agent Workbench → Mobile server on the desktop machine.")
 			.addText((t) => {
 				t.inputEl.type = "password";
 				t.setPlaceholder("Paste access token").setValue(s.remoteToken || s.serverToken).onChange(async (v) => {
@@ -492,7 +492,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 			header.setDesc("Packages are managed on the remote server. Installed on the server: " + (installed.map((p) => basename(p.path)).join(", ") || "none") + ".");
 			return;
 		}
-		header.setDesc("Pi Workbench only inspects installation status; it never installs, removes, or updates Pi packages. Manage packages yourself in a terminal. The switches below only control whether an installed package loads.");
+		header.setDesc("Agent Workbench only inspects installation status; it never installs, removes, or updates Pi packages. Manage packages yourself in a terminal. The switches below only control whether an installed package loads.");
 
 		const missingPackages = [...findRequired(installed)].filter(([, pkg]) => pkg === null).map(([name]) => name);
 		const skillsPackageMissing = !installed.some((pkg) => basename(pkg.path) === SKILLS_PACKAGE.name);
@@ -506,7 +506,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 
 		const required = new Set<string>([...REQUIRED_PACKAGES, SKILLS_PACKAGE.name]);
 		const scopes = [
-			{ file: plugin.panelSettingsFile, label: s.isolate ? "the panel's pi" : "your pi, shared with the terminal", editable: s.isolate },
+			{ file: plugin.panelSettingsFile, label: s.isolate ? "the panel's Pi" : "your Pi, shared with the terminal", editable: s.isolate },
 			{ file: plugin.vaultSettingsFile, label: "this vault's .pi folder", editable: true },
 		];
 		for (const scope of scopes) {
@@ -514,7 +514,7 @@ export class PiAgentSettingTab extends PluginSettingTab {
 				const source = sourceOf(entry);
 				const path = installed.find((pkg) => pkg.source === source)?.path;
 				const name = path ? basename(path) : source;
-				const description = [source, scope.label, required.has(name) ? "recommended by Pi Workbench" : null, path ? null : "not installed; manage it in a terminal"].filter(Boolean).join(" · ");
+				const description = [source, scope.label, required.has(name) ? "recommended by Agent Workbench" : null, path ? null : "not installed; manage it in a terminal"].filter(Boolean).join(" · ");
 				new Setting(el)
 					.setName(name)
 					.setDesc(description)

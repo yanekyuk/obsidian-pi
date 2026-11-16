@@ -26,14 +26,14 @@ export class PiRemoteClient {
 	wsUrl(path: "/rpc" | "/btw"): string {
 		const { url, token } = this.getConfig();
 		const target = normalizeWsUrl(url, path, token);
-		if (!target) throw new Error("Configure the remote pi server URL in Settings → Pi Workbench.");
+		if (!target) throw new Error("Configure the remote server URL in Settings → Agent Workbench.");
 		return target;
 	}
 
 	async call<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {
 		const { url, token } = this.getConfig();
 		const base = normalizeHttpUrl(url);
-		if (!base) throw new Error("Configure the remote pi server URL in Settings → Pi Workbench.");
+		if (!base) throw new Error("Configure the remote server URL in Settings → Agent Workbench.");
 		const endpoint = `${base}/api`;
 		const body = JSON.stringify({ action, ...params });
 		const headers: Record<string, string> = {

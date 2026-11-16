@@ -46,7 +46,7 @@ export async function createNoteFrom(app: App, text: string): Promise<TFile> {
 
 // A new note where Obsidian puts new notes, with a number added when the name is taken, opened in a tab.
 export async function createNote(app: App, title: string, body: string): Promise<TFile> {
-	const name = fileNameOf(title) || "pi reply";
+	const name = fileNameOf(title) || "Agent reply";
 	const folder = app.fileManager.getNewFileParent(app.workspace.getActiveFile()?.path ?? "");
 	const base = folder.path === "/" ? "" : `${folder.path}/`;
 	let path = normalizePath(`${base}${name}.md`);
@@ -60,7 +60,7 @@ export function splitTitle(text: string): { title: string; body: string } {
 	const trimmed = text.trim();
 	const heading = trimmed.match(/^#\s+(.+)\n?/);
 	const source = heading ? heading[1] : trimmed.split("\n").find((line) => line.trim()) ?? "";
-	const title = fileNameOf(source) || "pi reply";
+	const title = fileNameOf(source) || "Agent reply";
 	// A single top heading becomes the file name; anything else stays as written.
 	const body = heading ? trimmed.slice(heading[0].length).replace(/^\n+/, "") : trimmed;
 	return { title, body: body ? `${body}\n` : "" };

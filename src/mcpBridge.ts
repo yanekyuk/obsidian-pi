@@ -255,7 +255,7 @@ export class ObsidianMcpBridge {
 				return reply({
 					protocolVersion: "2024-11-05",
 					capabilities: { tools: {} },
-					serverInfo: { name: "pi-workbench-obsidian", version: "1.0.0" },
+					serverInfo: { name: "agent-workbench-obsidian", version: "1.0.0" },
 				});
 			}
 			if (msg.method === "tools/list") {

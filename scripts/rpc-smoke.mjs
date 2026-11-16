@@ -39,6 +39,7 @@ export { extractBundledFiles } from ${JSON.stringify(join(root, "src/bundled.ts"
 export { USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor } from ${JSON.stringify(join(root, "src/agentDir.ts"))};
 export { disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry } from ${JSON.stringify(join(root, "src/packages.ts"))};
 export { scopeModels } from ${JSON.stringify(join(root, "src/models.ts"))};
+export { backendLabel } from ${JSON.stringify(join(root, "src/rpc/AgentClient.ts"))};
 export { savedTabsFrom, panelsIn } from ${JSON.stringify(join(root, "src/view/savedTabs.ts"))};
 export { splitTitle, markdownOf } from ${JSON.stringify(join(root, "src/view/writeBack.ts"))};
 export { commandAllowed } from ${JSON.stringify(join(root, "src/obsidianControl.ts"))};
@@ -67,7 +68,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput, PiRemoteServer, PiRemoteClient, DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } =
+const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, backendLabel, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput, PiRemoteServer, PiRemoteClient, DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -272,7 +273,7 @@ const check = (ok, label, detail = "") => {
 	check(headed.title === "A plan part 1-2" && headed.body === "Body here\n", "splitTitle: a top heading names the file (unsafe characters replaced) and leaves the body", JSON.stringify(headed));
 	const plain = splitTitle("\n**Just** a line with [[Link]] and more.\nSecond line");
 	check(plain.title === "Just a line with Link and more" && plain.body === "**Just** a line with [[Link]] and more.\nSecond line\n", "splitTitle: otherwise the first line names it, trailing dot dropped, text kept as written", JSON.stringify(plain));
-	check(splitTitle("   ").title === "pi reply" && splitTitle("   ").body === "", "splitTitle: nothing to go on falls back to a fixed name");
+	check(splitTitle("   ").title === "Agent reply" && splitTitle("   ").body === "", "splitTitle: nothing to go on falls back to a fixed name");
 	check(splitTitle("# " + "x".repeat(100)).title.length === 60, "splitTitle: names are cut to 60 characters");
 }
 
@@ -404,9 +405,11 @@ const check = (ok, label, detail = "") => {
 		{ role: "user", content: [{ type: "image", data: "…", mimeType: "image/png" }] },
 		{ role: "assistant", content: [{ type: "text", text: "" }], stopReason: "aborted" },
 	];
-	const note = transcriptMarkdown(messages, "Milk", "/s/2026-01-01_abc.jsonl", new Date("2026-09-22T10:00:00Z"));
-	check(note.startsWith("---\npi-session: 2026-01-01_abc.jsonl\nexported: 2026-09-22\n---\n\n# Milk\n\n**You**\n\n*Looking at [[Inbox/Todo]], with a selection*\n\nWhat's this?\n\n---\n\n**pi**\n\n> ⚙ `read` Inbox/Todo.md\n\nA shopping list.\n"), "export: properties, title, turns with context, tool calls as asides", JSON.stringify(note.slice(0, 200)));
-	check(!note.includes("private") && !note.includes("secret output") && !note.includes("**pi**\n\n\n"), "export: thinking, tool output and empty turns stay out");
+	const note = transcriptMarkdown(messages, "Milk", "/s/2026-01-01_abc.jsonl", new Date("2026-09-22T10:00:00Z"), "Pi");
+	check(note.startsWith("---\npi-session: 2026-01-01_abc.jsonl\nexported: 2026-09-22\n---\n\n# Milk\n\n**You**\n\n*Looking at [[Inbox/Todo]], with a selection*\n\nWhat's this?\n\n---\n\n**Pi**\n\n> ⚙ `read` Inbox/Todo.md\n\nA shopping list.\n"), "export: properties, title, turns with context, tool calls as asides", JSON.stringify(note.slice(0, 200)));
+	check(!note.includes("private") && !note.includes("secret output") && !note.includes("**Pi**\n\n\n"), "export: thinking, tool output and empty turns stay out");
+	check(transcriptMarkdown(messages, "Milk", null, new Date("2026-09-22T10:00:00Z"), "Agy").includes("**Agy**"), "export: uses the active backend label");
+	check(backendLabel("pi") === "Pi" && backendLabel("acp") === "Agy", "backendLabel: maps pi -> Pi and acp -> Agy");
 	mkdirSync(join(work, "sessions-a"), { recursive: true });
 	writeFileSync(join(work, "sessions-a", "one.jsonl"), "");
 	check(resolveLinked("one.jsonl", [null, join(work, "nope"), join(work, "sessions-a")]) === join(work, "sessions-a", "one.jsonl") && resolveLinked("two.jsonl", [join(work, "sessions-a")]) === null, "link: a stored file name is found in the first folder that has it");

@@ -8,7 +8,7 @@ import { hasLegacyMcpCommand, probeMcp, vaultMcpServers } from "../mcp";
 import { readActiveContext, rewordMessage, splitContext, withContext } from "../prompt";
 import { findRequired, manualInstallCommands, OBSIDIAN_SKILLS, SKILLS_PACKAGE } from "../requirements";
 import { AcpClient } from "../rpc/AcpClient";
-import type { AgentBackend, AgentClient } from "../rpc/AgentClient";
+import { backendLabel, type AgentBackend, type AgentClient } from "../rpc/AgentClient";
 import { PiRpcClient } from "../rpc/PiRpcClient";
 import type { AgentMessage, AssistantMessageEvent, BranchSummaryMessage, ExtensionUiRequest, ImageContent, RpcEvent, SessionEntry, SessionState, SlashCommand, ToolCallContent, UserMessage } from "../rpc/types";
 import { contentText } from "../sessions";
@@ -213,6 +213,10 @@ export class ChatSession {
 		return this.host.plugin;
 	}
 
+	get backendLabel(): string {
+		return backendLabel(this.backend);
+	}
+
 	get heldSessionFile(): string | null {
 		return this.state?.sessionFile ?? this.sessionFile;
 	}
@@ -262,7 +266,7 @@ export class ChatSession {
 			case "unloaded":
 				return "Not loaded yet";
 			case "error":
-				return "pi stopped";
+				return `${this.backendLabel} stopped`;
 			case "asking":
 				return "Waiting for your answer";
 			case "working":
@@ -385,7 +389,7 @@ export class ChatSession {
 		});
 
 		this.attachments = new AttachmentTray(composer, () => this.renderComposerMode());
-		this.inputEl = composer.createEl("textarea", { cls: "pi-input", attr: { rows: "1", placeholder: "Ask pi…  / for commands, [[ or @ for notes" } });
+		this.inputEl = composer.createEl("textarea", { cls: "pi-input", attr: { rows: "1", placeholder: `Ask ${this.backendLabel}…  / for commands, [[ or @ for notes` } });
 		this.suggest = new ComposerSuggest(this.app, this.inputEl, composer);
 		this.inputEl.addEventListener("input", () => this.autoGrow());
 		this.inputEl.addEventListener("keydown", (evt) => this.onInputKey(evt));
@@ -416,8 +420,8 @@ export class ChatSession {
 		});
 
 		this.deliveryModesEl = composer.createDiv({ cls: "pi-delivery-modes", attr: { role: "group", "aria-label": "When to deliver this message" } });
-		this.steerModeBtn = this.deliveryModesEl.createEl("button", { text: "Steer · next step", attr: { type: "button", title: "Pi reads it after the current step (Enter)" } });
-		this.queueModeBtn = this.deliveryModesEl.createEl("button", { text: "Queue · after task", attr: { type: "button", title: "Pi reads it once the current task finishes (Enter when selected, or Alt+Enter)" } });
+		this.steerModeBtn = this.deliveryModesEl.createEl("button", { text: "Steer · next step", attr: { type: "button", title: `${this.backendLabel} reads it after the current step (Enter)` } });
+		this.queueModeBtn = this.deliveryModesEl.createEl("button", { text: "Queue · after task", attr: { type: "button", title: `${this.backendLabel} reads it once the current task finishes (Enter when selected, or Alt+Enter)` } });
 		this.steerModeBtn.addEventListener("click", () => this.setDeliveryMode("steer"));
 		this.queueModeBtn.addEventListener("click", () => this.setDeliveryMode("followUp"));
 
@@ -478,7 +482,7 @@ export class ChatSession {
 		this.noteChipEl.toggle(file !== null);
 		if (!file) return;
 		this.noteChipEl.toggleClass("is-off", !this.shareNote);
-		this.noteChipEl.setAttr("aria-label", this.shareNote ? "Shared with pi, along with your selection. Click to stop sharing." : "Not shared with pi. Click to share.");
+		this.noteChipEl.setAttr("aria-label", this.shareNote ? `Shared with ${this.backendLabel}, along with your selection. Click to stop sharing.` : `Not shared with ${this.backendLabel}. Click to share.`);
 		setIcon(this.noteChipEl.createSpan({ cls: "pi-icon" }), this.shareNote ? "file-text" : "file-x");
 		this.noteChipEl.createSpan({ text: file.basename });
 	}
@@ -537,14 +541,14 @@ export class ChatSession {
 			this.sendBtn.setAttr("aria-label", `Send after compaction as ${this.deliveryMode === "steer" ? "steering" : "a follow-up"} (Enter)`);
 			this.inputEl.placeholder = "Compacting… what you send now goes out when it's done";
 		} else if (this.busy && this.deliveryMode === "steer") {
-			this.sendBtn.setAttr("aria-label", "Steer pi after its next step (Enter)");
-			this.inputEl.placeholder = "Steer pi…  Alt+Enter queues after the task";
+			this.sendBtn.setAttr("aria-label", `Steer ${this.backendLabel} after its next step (Enter)`);
+			this.inputEl.placeholder = `Steer ${this.backendLabel}…  Alt+Enter queues after the task`;
 		} else if (this.busy) {
-			this.sendBtn.setAttr("aria-label", "Queue for after pi finishes (Enter)");
-			this.inputEl.placeholder = "Queue for after pi finishes…";
+			this.sendBtn.setAttr("aria-label", `Queue for after ${this.backendLabel} finishes (Enter)`);
+			this.inputEl.placeholder = `Queue for after ${this.backendLabel} finishes…`;
 		} else {
 			this.sendBtn.setAttr("aria-label", "Send (Enter)");
-			this.inputEl.placeholder = "Ask pi…  / for commands, @ for notes";
+			this.inputEl.placeholder = `Ask ${this.backendLabel}…  / for commands, @ for notes`;
 		}
 	}
 
@@ -609,14 +613,14 @@ export class ChatSession {
 		if (skillsMissing) {
 			card.createDiv({
 				text: skillsPackageInstalled
-					? "The Obsidian skills package is installed but its skills are not loaded. Enable the package in Pi Workbench settings, or check its Pi filters."
+					? "The Obsidian skills package is installed but its skills are not loaded. Enable the package in Agent Workbench settings, or check its Pi filters."
 					: "Obsidian skills for notes, Bases, and Canvas are not loaded.",
 			});
 		}
 
 		const commands = manualInstallCommands(missingPackages, skillsMissing && !skillsPackageInstalled);
 		if (commands.length) {
-			card.createDiv({ text: "Pi Workbench never installs or updates packages. Open a terminal in this vault's root and run:" });
+			card.createDiv({ text: "Agent Workbench never installs or updates packages. Open a terminal in this vault's root and run:" });
 			card.createEl("pre", { cls: "pi-prerequisite-commands", text: commands.join("\n") });
 		}
 		const actions = card.createDiv({ cls: "pi-dialog-actions" });
@@ -635,7 +639,7 @@ export class ChatSession {
 		setIcon(this.mcpWarningEl.createSpan({ cls: "pi-icon" }), "alert-triangle");
 		const lines = down.map((s) => `MCP server "${s.name}" is unavailable: ${s.reason} (${s.url.replace(/^https?:\/\//, "")}).`);
 		const hint = down.some((s) => s.name === "obsidian") && !this.plugin.isPluginEnabled("vault-as-mcp") ? " Enable the Vault as MCP plugin." : "";
-		this.mcpWarningEl.createSpan({ text: `${lines.join(" ")} pi can't use it until it is back.${hint}` });
+		this.mcpWarningEl.createSpan({ text: `${lines.join(" ")} Pi can't use it until it is back.${hint}` });
 	}
 
 	private showBanner(title: string, detail: string, action?: { label: string; run: () => void }): void {
@@ -669,13 +673,13 @@ export class ChatSession {
 			this.connecting = false;
 			this.failed = true;
 			this.showBanner(
-				"Remote pi server is not configured",
-				"Turn on 'Host server for Obsidian Mobile' in desktop Obsidian, then enter the server URL and access token in Settings → Pi Workbench.",
+				"Remote server is not configured",
+				"Turn on 'Host server for Obsidian Mobile' in desktop Obsidian, then enter the server URL and access token in Settings → Agent Workbench.",
 				{ label: "Open settings", run: () => this.plugin.openSettings() },
 			);
 			return;
 		}
-		this.setActivity(this.backend === "acp" ? "Starting Antigravity (agy acp)…" : "Starting pi…");
+		this.setActivity(`Starting ${this.backendLabel}…`);
 		try {
 			const target = session ?? this.resumeTarget();
 			this.sessionFile = target;
@@ -695,12 +699,12 @@ export class ChatSession {
 		} catch (err) {
 			const missing = (err as NodeJS.ErrnoException).code === "ENOENT";
 			const bin = this.backend === "acp" ? this.plugin.settings.agyPath : this.plugin.settings.piPath;
-			const label = this.backend === "acp" ? "Antigravity (agy acp)" : "pi";
+			const label = this.backendLabel;
 			this.failed = true;
 			this.showBanner(
 				missing ? `Couldn't find "${bin}"` : `${label} failed to start`,
 				missing
-					? `Install ${label}, or set its full path in Settings → Pi Workbench.`
+					? `Install ${label}, or set its full path in Settings → Agent Workbench.`
 					: String((err as Error).message ?? err),
 				{ label: "Retry", run: () => void this.restart() },
 			);
@@ -724,7 +728,7 @@ export class ChatSession {
 		this.settleToolGroup();
 		this.live = null;
 		if (info.expected || this.connecting) return;
-		this.showBanner(`pi exited${info.code === null ? "" : ` with code ${info.code}`}`, info.stderr.split("\n").slice(-12).join("\n"), {
+		this.showBanner(`${this.backendLabel} exited${info.code === null ? "" : ` with code ${info.code}`}`, info.stderr.split("\n").slice(-12).join("\n"), {
 			label: "Restart",
 			run: () => void this.restart(),
 		});
@@ -738,7 +742,7 @@ export class ChatSession {
 			this.reconnectBannerTimer = null;
 			if (!this.connecting || !this.client.isReconnecting) return;
 			this.showBanner(
-				"Reconnecting to remote pi server…",
+				"Reconnecting to remote server…",
 				"Waiting for the desktop server to respond.",
 				{ label: "Retry now", run: () => this.client.nudgeReconnect() },
 			);
@@ -796,11 +800,11 @@ export class ChatSession {
 	async reload(): Promise<void> {
 		if (this.connecting) return;
 		if (!this.replaceable) {
-			new Notice(this.isBusy ? "pi is still working. Reload once it has finished, or stop it first." : "pi is waiting for your answer. Reload once you have answered.");
+			new Notice(this.isBusy ? `${this.backendLabel} is still working. Reload once it has finished, or stop it first.` : `${this.backendLabel} is waiting for your answer. Reload once you have answered.`);
 			return;
 		}
 		await this.restart();
-		if (!this.failed) this.renderNotice("pi reloaded");
+		if (!this.failed) this.renderNotice(`${this.backendLabel} reloaded`);
 	}
 
 	async restart(session?: string): Promise<void> {
@@ -812,7 +816,7 @@ export class ChatSession {
 	// The conversation so far as a new note.
 	async exportToNote(): Promise<void> {
 		if (!this.client.running) {
-			new Notice("pi isn't running in this tab.");
+			new Notice(`${this.backendLabel} isn't running in this tab.`);
 			return;
 		}
 		const messages = await this.client.getMessages();
@@ -820,7 +824,7 @@ export class ChatSession {
 			new Notice("Nothing to export yet.");
 			return;
 		}
-		const file = await createNote(this.app, this.title, transcriptMarkdown(messages, this.title, this.heldSessionFile));
+		const file = await createNote(this.app, this.title, transcriptMarkdown(messages, this.title, this.heldSessionFile, undefined, this.backendLabel));
 		new Notice(`Exported to ${file.basename}.`);
 	}
 
@@ -932,7 +936,7 @@ export class ChatSession {
 			return;
 		}
 		if (!this.client.running) {
-			new Notice("pi isn't running. Start it again with the panel's ↻ button.");
+			new Notice(`${this.backendLabel} isn't running. Start it again with the panel's ↻ button.`);
 			return;
 		}
 		this.host.closeDrawer();
@@ -961,7 +965,7 @@ export class ChatSession {
 			this.inputEl.value = text;
 			this.attachments.restore(images);
 			this.autoGrow();
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 		}
 	}
 
@@ -1056,7 +1060,7 @@ export class ChatSession {
 				this.renderQueue();
 			}
 		} catch (err) {
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 			await this.unqueue();
 		} finally {
 			this.flushing = false;
@@ -1069,11 +1073,11 @@ export class ChatSession {
 		const images = imagesOf(message);
 		if (!text && !images.length) return;
 		if (!this.client.running) {
-			new Notice("pi isn't running. Start it again with the panel's ↻ button.");
+			new Notice(`${this.backendLabel} isn't running. Start it again with the panel's ↻ button.`);
 			return;
 		}
 		if (this.compacting) {
-			new Notice("pi is compacting. Edit the message once it's done.");
+			new Notice(`${this.backendLabel} is compacting. Edit the message once it's done.`);
 			return;
 		}
 		try {
@@ -1088,7 +1092,7 @@ export class ChatSession {
 			await this.syncSession();
 			await this.client.prompt(rewordMessage(contentText(message.content), text), { images });
 		} catch (err) {
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 		}
 	}
 
@@ -1101,11 +1105,11 @@ export class ChatSession {
 			return;
 		}
 		if (!this.client.running) {
-			new Notice("pi isn't running. Start it again with the panel's ↻ button.");
+			new Notice(`${this.backendLabel} isn't running. Start it again with the panel's ↻ button.`);
 			return;
 		}
 		if (this.isBusy) {
-			new Notice("Wait for pi to finish before starting a branch.");
+			new Notice(`Wait for ${this.backendLabel} to finish before starting a branch.`);
 			return;
 		}
 		if (!this.hasConversation) {
@@ -1145,7 +1149,7 @@ export class ChatSession {
 			this.inputEl.value = text;
 			this.attachments.restore(images);
 			this.autoGrow();
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 		}
 	}
 
@@ -1158,7 +1162,7 @@ export class ChatSession {
 			await this.syncSession();
 			this.focusComposer();
 		} catch (err) {
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 		}
 	}
 
@@ -1173,7 +1177,7 @@ export class ChatSession {
 			await this.syncSession();
 			this.focusComposer();
 		} catch (err) {
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 		} finally {
 			this.setCompacting(false);
 			this.setActivity(this.busy ? "Working…" : null);
@@ -1188,7 +1192,7 @@ export class ChatSession {
 			return null;
 		}
 		if (!this.replaceable) {
-			new Notice("pi is still working in this session. Fork it once it has finished.");
+			new Notice(`${this.backendLabel} is still working in this session. Fork it once it has finished.`);
 			return null;
 		}
 		const original = this.heldSessionFile;
@@ -1201,7 +1205,7 @@ export class ChatSession {
 			this.host.sessionsChanged();
 			return forked && forked !== original ? forked : null;
 		} catch (err) {
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 			return null;
 		}
 	}
@@ -1238,7 +1242,7 @@ export class ChatSession {
 				return;
 			}
 		} catch (err) {
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 		}
 		this.sessionFile = previous;
 		if (this.state) this.state.sessionFile = previous ?? undefined;
@@ -1255,7 +1259,7 @@ export class ChatSession {
 			this.renderControls();
 			this.host.sessionsChanged();
 		} catch (err) {
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 		}
 	}
 
@@ -1263,7 +1267,7 @@ export class ChatSession {
 	async duplicate(): Promise<void> {
 		if (!this.client.running) return;
 		if (!this.replaceable) {
-			new Notice("pi is still working in that session. Duplicate it once it has finished.");
+			new Notice(`${this.backendLabel} is still working in that session. Duplicate it once it has finished.`);
 			return;
 		}
 		try {
@@ -1272,7 +1276,7 @@ export class ChatSession {
 			await this.syncSession();
 			new Notice("Now in a copy of the session.");
 		} catch (err) {
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 		}
 	}
 
@@ -1294,7 +1298,7 @@ export class ChatSession {
 					this.state = await this.client.getState();
 					this.renderControls();
 				} catch (err) {
-					new Notice(`pi: ${(err as Error).message}`);
+					new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 				}
 			},
 			(showAll) => {
@@ -1324,13 +1328,13 @@ export class ChatSession {
 	async compact(instructions?: string): Promise<void> {
 		if (!this.client.running) return;
 		if (this.isBusy) {
-			new Notice(this.busy ? "pi is still working. Compact once it has finished, or stop it first." : "Already compacting.");
+			new Notice(this.busy ? `${this.backendLabel} is still working. Compact once it has finished, or stop it first.` : "Already compacting.");
 			return;
 		}
 		try {
 			await this.client.compact(instructions || undefined);
 		} catch (err) {
-			new Notice(`pi: ${(err as Error).message}`);
+			new Notice(`${this.backendLabel}: ${(err as Error).message}`);
 		}
 	}
 
@@ -1667,8 +1671,8 @@ export class ChatSession {
 		if (this.messagesEl.querySelector(".pi-msg:not(.pi-msg-notice), .pi-msg-notice.is-error, .pi-branch-divider, .pi-branch-card")) return;
 		const empty = this.messagesEl.createDiv({ cls: "pi-empty" });
 		this.messagesEl.prepend(empty);
-		setIcon(empty.createDiv({ cls: "pi-empty-icon" }), "pi");
-		empty.createDiv({ cls: "pi-empty-title", text: `Ask pi about ${this.app.vault.getName()}` });
+		setIcon(empty.createDiv({ cls: "pi-empty-icon" }), this.backend === "acp" ? "sparkles" : "pi");
+		empty.createDiv({ cls: "pi-empty-title", text: `Ask ${this.backendLabel} about ${this.app.vault.getName()}` });
 		const skills = this.suggest.commands.filter((c) => c.source === "skill" && OBSIDIAN_SKILLS.includes(c.name.replace(/^skill:/, "")));
 		if (!skills.length) return;
 		const chips = empty.createDiv({ cls: "pi-empty-skills" });

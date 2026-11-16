@@ -1,7 +1,7 @@
 {
   "name": "obsidian-pi",
-  "version": "0.1.39",
-  "description": "Obsidian harness for the pi coding agent",
+  "version": "0.1.40",
+  "description": "Obsidian harness for Pi and Agy coding agents",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -14,6 +14,8 @@
   "keywords": [
     "obsidian",
     "pi",
+    "agy",
+    "acp",
     "agent"
   ],
   "license": "MIT",

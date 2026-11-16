@@ -2,7 +2,7 @@
 // Without a path it uses the vault Obsidian currently has open.
 //
 //   npm run install:test [-- /path/to/vault]
-// installs the build as a second plugin, "Pi Workbench (test)" (id pi-workbench-test), to try a change
+// installs the build as a second plugin, "Agent Workbench (test)" (id pi-workbench-test), to try a change
 // before it is released. Its panel's view type and its obsidian:// address get names of their own,
 // so it can run next to the released plugin. On the first install it copies the released plugin's
 // settings, but not its last session: two pi processes on one session file would corrupt it.

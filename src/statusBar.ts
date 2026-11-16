@@ -38,12 +38,19 @@ export class StatusBar {
 			this.target = null;
 			return;
 		}
-		this.target = tabs.find((tab) => tab.status === summary.status) ?? null;
+		const matching = tabs.filter((tab) => tab.status === summary.status);
+		this.target = matching[0] ?? null;
 		this.el.dataset.status = summary.status;
 		this.iconEl.empty();
 		setIcon(this.iconEl, summary.status === "asking" ? "message-circle-question" : "loader");
 		const detail = this.target && summary.count === 1 ? this.target.title : `${summary.count} tabs`;
-		this.textEl.setText(summary.status === "asking" ? `pi is asking: ${detail}` : `pi: ${detail}`);
+		const sameBackend = matching.length > 0 && matching.every((tab) => tab.backend === matching[0].backend);
+		const prefix = sameBackend ? matching[0].backendLabel : "Agents";
+		this.textEl.setText(
+			summary.status === "asking"
+				? `${prefix} ${sameBackend ? "is" : "are"} asking: ${detail}`
+				: `${prefix}: ${detail}`,
+		);
 		this.el.setAttr("aria-label", summary.label.replace("Other tabs", "Tabs"));
 		this.el.show();
 	}

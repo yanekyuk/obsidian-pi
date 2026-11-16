@@ -161,7 +161,7 @@ export class AcpClient implements AgentClient {
 				fs: { readTextFile: false, writeTextFile: false },
 				terminal: false,
 			},
-			clientInfo: { name: "pi-workbench", version: "0.1.37" },
+			clientInfo: { name: "agent-workbench", version: "0.1.40" },
 		});
 
 		await this.openSession(opts.sessionId ?? null);
@@ -296,7 +296,7 @@ export class AcpClient implements AgentClient {
 			this.proc = null;
 			for (const [, p] of this.pending) {
 				if (p.timer) clearTimeout(p.timer);
-				p.reject(new Error(this.stderrTail.trim() || `agy acp exited (${code ?? "signal"})`));
+				p.reject(new Error(this.stderrTail.trim() || `Agy exited (${code ?? "signal"})`));
 			}
 			this.pending.clear();
 			this.pendingPermissions.clear();
@@ -343,7 +343,7 @@ export class AcpClient implements AgentClient {
 
 	private formatAcpError(message: string): string {
 		if (/auth|login|unauthenticated|credential/i.test(message)) {
-			return `${message}\nRun "agy acp --login" in your terminal to authenticate Antigravity.`;
+			return `${message}\nRun "agy acp --login" in your terminal to authenticate Agy.`;
 		}
 		return message;
 	}
@@ -557,7 +557,7 @@ export class AcpClient implements AgentClient {
 	}
 
 	private request(method: string, params: Record<string, unknown>): Promise<unknown> {
-		if (!this.proc) return Promise.reject(new Error("agy acp is not running."));
+		if (!this.proc) return Promise.reject(new Error("Agy is not running."));
 		const id = this.nextId++;
 		return new Promise((resolve, reject) => {
 			const timer = LONG_RUNNING_METHODS.has(method)

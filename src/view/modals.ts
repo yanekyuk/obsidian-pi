@@ -77,7 +77,7 @@ export class ModelPicker extends FuzzySuggestModal<ModelChoice> {
 
 	onChooseItem(choice: ModelChoice): void {
 		if (choice.model) return this.onPick(choice.model, choice.thinkingLevel);
-		new Notice(`pi has no model for "${choice.unavailable}" right now. Its provider may come from a package that isn't installed for the panel's pi (Settings → Extensions → Packages), or you aren't logged in to it.`, 10000);
+		new Notice(`Pi has no model for "${choice.unavailable}" right now. Its provider may come from a package that isn't installed for the panel's Pi (Settings → Extensions → Packages), or you aren't logged in to it.`, 10000);
 	}
 }
 

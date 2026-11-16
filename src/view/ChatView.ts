@@ -1,6 +1,6 @@
 import { ItemView, Menu, Notice, setIcon, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import type PiAgentPlugin from "../main";
-import type { AgentBackend } from "../rpc/AgentClient";
+import { backendLabel, type AgentBackend } from "../rpc/AgentClient";
 import type { SessionSummary } from "../sessions";
 import { ChatSession, type SessionHost } from "./ChatSession";
 import { confirmAction } from "./modals";
@@ -22,6 +22,7 @@ export class ChatView extends ItemView {
 
 	private tabsEl!: HTMLElement;
 	private titleEl!: HTMLElement;
+	private backendEl!: HTMLElement;
 	private nameEl!: HTMLElement;
 	private othersEl!: HTMLElement;
 	private othersCountEl!: HTMLElement;
@@ -56,7 +57,7 @@ export class ChatView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return this.active ? `pi · ${this.active.title}` : "pi";
+		return this.active ? `${this.active.backendLabel} · ${this.active.title}` : "Agent Workbench";
 	}
 
 	getIcon(): string {
@@ -133,8 +134,8 @@ export class ChatView extends ItemView {
 	private addMenuItems(menu: Menu): void {
 		const tab = this.current();
 		menu.addItem((i) => i.setTitle("New tab").setIcon("lucide-file-plus").onClick(() => this.newTab()));
-		menu.addItem((i) => i.setTitle("New pi tab").setIcon("terminal").onClick(() => this.newTab("pi")));
-		menu.addItem((i) => i.setTitle("New Antigravity (ACP) tab").setIcon("sparkles").onClick(() => this.newTab("acp")));
+		menu.addItem((i) => i.setTitle("New Pi tab").setIcon("terminal").onClick(() => this.newTab("pi")));
+		menu.addItem((i) => i.setTitle("New Agy tab").setIcon("sparkles").onClick(() => this.newTab("acp")));
 		if (this.tabs.length > 1) menu.addItem((i) => i.setTitle("Close tab").setIcon("x").onClick(() => void this.closeTab(tab)));
 		menu.addSeparator();
 		menu.addItem((i) => i.setTitle("Rename session…").setIcon("pencil").onClick(() => void tab.renameCurrent()));
@@ -168,6 +169,7 @@ export class ChatView extends ItemView {
 		// docked in a sidebar, so the controls live inside the panel, styled like the file explorer's.
 		const toolbar = root.createDiv({ cls: "pi-toolbar" });
 		this.titleEl = toolbar.createDiv({ cls: "pi-toolbar-title", attr: { "aria-label": "Open tabs", role: "button", tabindex: "0" } });
+		this.backendEl = this.titleEl.createSpan({ cls: "pi-backend-badge" });
 		this.nameEl = this.titleEl.createSpan({ cls: "pi-toolbar-name" });
 		setIcon(this.titleEl.createSpan({ cls: "pi-icon" }), "chevron-down");
 		this.othersEl = this.titleEl.createSpan({ cls: "pi-toolbar-others" });
@@ -189,7 +191,7 @@ export class ChatView extends ItemView {
 		};
 		button("plus", "New session", () => void this.newSession());
 		this.sessionsBtn = button("history", "Sessions", () => this.toggleSessions());
-		this.reloadBtn = button("refresh-cw", "Reload pi (/reload)", () => void this.reload());
+		this.reloadBtn = button("refresh-cw", "Reload agent (/reload)", () => void this.reload());
 		button("more-vertical", "More", (evt) => {
 			const menu = new Menu();
 			this.addMenuItems(menu);
@@ -202,7 +204,7 @@ export class ChatView extends ItemView {
 			select: (tab) => this.activate(tab),
 			close: (tab) => void this.closeTab(tab),
 			reload: (tab) => void (tab === this.active ? this.reload() : tab.reload()),
-			newTab: () => this.newTab(),
+			newTab: (backend) => this.newTab(backend),
 		});
 
 		this.drawer = new SessionsDrawer(root, {
@@ -227,7 +229,12 @@ export class ChatView extends ItemView {
 	}
 
 	private renderTitle(): void {
-		this.nameEl.setText(this.active?.title ?? "pi");
+		const backend = this.active?.backend ?? this.plugin.settings.backend;
+		const label = backendLabel(backend);
+		this.backendEl.setText(label);
+		this.backendEl.dataset.backend = backend;
+		this.nameEl.setText(this.active?.title ?? "New session");
+		this.reloadBtn.setAttr("aria-label", `Reload ${label} (/reload)`);
 		const others = summarize(this.tabs.filter((tab) => tab !== this.active));
 		this.othersEl.toggle(others !== null);
 		if (others) {
@@ -322,7 +329,7 @@ export class ChatView extends ItemView {
 	// Closing stops that tab's pi. The conversation stays in the session history.
 	async closeTab(tab: ChatSession): Promise<void> {
 		if (!this.tabs.includes(tab)) return;
-		if (tab.isBusy && !(await confirmAction(this.app, "Close this tab?", `pi is still working in "${tab.title}". Closing the tab stops it.`, "Stop and close"))) return;
+		if (tab.isBusy && !(await confirmAction(this.app, "Close this tab?", `${tab.backendLabel} is still working in "${tab.title}". Closing the tab stops it.`, "Stop and close"))) return;
 		const index = this.tabs.indexOf(tab);
 		if (index === -1) return;
 		this.tabs.splice(index, 1);
@@ -356,8 +363,11 @@ export class ChatView extends ItemView {
 		}
 		const holderAfterCheck = this.plugin.holderOf(path);
 		if (holderAfterCheck) return holderAfterCheck.view.revealTab(holderAfterCheck.tab);
-		const empty = (this.active?.isEmpty ? this.active : null) ?? this.tabs.find((tab) => tab.isEmpty);
-		if (!empty) return void this.addTab({ sessionFile: path });
+		const targetBackend: AgentBackend = path.startsWith("acp:") ? "acp" : "pi";
+		const empty =
+			(this.active?.isEmpty && this.active.backend === targetBackend ? this.active : null) ??
+			this.tabs.find((tab) => tab.isEmpty && tab.backend === targetBackend);
+		if (!empty) return void this.addTab({ sessionFile: path, backend: targetBackend });
 		this.activate(empty);
 		await empty.load(path);
 	}

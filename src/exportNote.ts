@@ -16,7 +16,7 @@ function toolLine(call: ToolCallContent): string {
 	return `> ⚙ \`${call.name}\`${detail ? ` ${detail}` : ""}`;
 }
 
-export function transcriptMarkdown(messages: AgentMessage[], title: string, sessionFile: string | null, date = new Date()): string {
+export function transcriptMarkdown(messages: AgentMessage[], title: string, sessionFile: string | null, date = new Date(), agentLabel = "Agent"): string {
 	const parts: string[] = [];
 	for (const message of messages) {
 		if (message.role === "user") {
@@ -29,7 +29,7 @@ export function transcriptMarkdown(messages: AgentMessage[], title: string, sess
 				if (block.type === "text" && block.text.trim()) lines.push(block.text.trim());
 				else if (block.type === "toolCall") lines.push(toolLine(block as ToolCallContent));
 			}
-			if (lines.length) parts.push(`**pi**\n\n${lines.join("\n\n")}`);
+			if (lines.length) parts.push(`**${agentLabel}**\n\n${lines.join("\n\n")}`);
 		} else if (message.role === "branchSummary" && typeof message.summary === "string" && message.summary.trim()) {
 			parts.push(`**Branch summary**\n\n${message.summary.trim()}`);
 		}

@@ -1,4 +1,4 @@
-/* Pi Harness. Every color, font and radius comes from Obsidian's theme variables,
+/* Agent Workbench. Every color, font and radius comes from Obsidian's theme variables,
    so the panel follows the active theme, accent color and light/dark mode. */
 
 .pi-view {
@@ -1470,6 +1470,25 @@ textarea.pi-input:active {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+.pi-backend-badge {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	padding: 1px var(--size-2-2);
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-semibold);
+	line-height: 1.3;
+	letter-spacing: 0.01em;
+	color: var(--text-muted);
+}
+.pi-backend-badge[data-backend="acp"] {
+	border-color: color-mix(in srgb, var(--text-accent) 35%, transparent);
+	background: color-mix(in srgb, var(--text-accent) 12%, transparent);
+	color: var(--text-accent);
+}
 .pi-toolbar-others {
 	flex: none;
 	display: inline-flex;
@@ -1568,6 +1587,12 @@ textarea.pi-input:active {
 .pi-switcher-row .suggestion-content {
 	min-width: 0;
 }
+.pi-switcher-title-row {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	min-width: 0;
+}
 .pi-switcher-action {
 	flex: none;
 	padding: var(--size-2-1);
@@ -1580,11 +1605,14 @@ textarea.pi-input:active {
 .pi-switcher-row.is-selected .pi-switcher-action {
 	opacity: 1;
 }
-/* "New tab" is set apart by a rule that floats between the rows, so its hover shape stays whole. */
-.pi-switcher-new {
+/* "New tab" actions are set apart by a rule that floats between the rows, so each hover shape stays whole. */
+.pi-switcher-new,
+.pi-switcher-new-item {
 	position: relative;
-	margin-top: calc(var(--size-2-3) * 2 + 1px);
 	color: var(--text-muted);
+}
+.pi-switcher-new {
+	margin-top: calc(var(--size-2-3) * 2 + 1px);
 }
 .pi-switcher-new::before {
 	content: "";

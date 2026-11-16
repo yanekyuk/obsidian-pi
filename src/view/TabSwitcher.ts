@@ -1,4 +1,5 @@
 import { setIcon } from "obsidian";
+import type { AgentBackend } from "../rpc/AgentClient";
 import type { ChatSession, TabStatus } from "./ChatSession";
 
 const STATUS_ICON: Partial<Record<TabStatus, string>> = {
@@ -37,15 +38,17 @@ export interface SwitcherHost {
 	select(tab: ChatSession): void;
 	close(tab: ChatSession): void;
 	reload(tab: ChatSession): void;
-	newTab(): void;
+	newTab(backend?: AgentBackend): void;
 }
 
 interface Row {
 	tab: ChatSession;
 	el: HTMLElement;
 	statusEl: HTMLElement;
+	backendEl: HTMLElement;
 	titleEl: HTMLElement;
 	noteEl: HTMLElement;
+	reloadBtn: HTMLElement;
 }
 
 // The list of open tabs that drops down from the panel's title.
@@ -103,9 +106,12 @@ export class TabSwitcher {
 		const active = this.host.active();
 		this.rows.forEach((row, i) => {
 			renderStatus(row.statusEl, row.tab.status);
+			row.backendEl.setText(row.tab.backendLabel);
+			row.backendEl.dataset.backend = row.tab.backend;
 			row.titleEl.setText(row.tab.title);
 			row.noteEl.setText(row.tab.detail);
 			row.noteEl.toggle(row.tab.detail !== "");
+			row.reloadBtn.setAttr("aria-label", `Reload ${row.tab.backendLabel} in this tab`);
 			row.el.toggleClass("is-current", row.tab === active);
 			row.el.toggleClass("is-selected", i === this.selected);
 		});
@@ -120,7 +126,9 @@ export class TabSwitcher {
 			const el = list.createDiv({ cls: "pi-switcher-row suggestion-item mod-complex" });
 			const statusEl = el.createDiv({ cls: "pi-tab-status suggestion-icon" });
 			const content = el.createDiv({ cls: "suggestion-content" });
-			const titleEl = content.createDiv({ cls: "suggestion-title" });
+			const titleRow = content.createDiv({ cls: "pi-switcher-title-row" });
+			const backendEl = titleRow.createSpan({ cls: "pi-backend-badge" });
+			const titleEl = titleRow.createDiv({ cls: "suggestion-title" });
 			const noteEl = content.createDiv({ cls: "suggestion-note" });
 			const action = (icon: string, label: string, run: () => void) => {
 				const button = el.createDiv({ cls: "pi-switcher-action clickable-icon", attr: { "aria-label": label } });
@@ -129,8 +137,9 @@ export class TabSwitcher {
 					evt.stopPropagation();
 					run();
 				});
+				return button;
 			};
-			action("refresh-cw", "Reload pi in this tab", () => this.host.reload(tab));
+			const reloadBtn = action("refresh-cw", `Reload ${tab.backendLabel} in this tab`, () => this.host.reload(tab));
 			action("x", "Close tab", () => this.host.close(tab));
 			el.addEventListener("click", () => this.choose(tab));
 			el.addEventListener("mousemove", () => {
@@ -138,16 +147,20 @@ export class TabSwitcher {
 				this.selected = i;
 				this.update();
 			});
-			return { tab, el, statusEl, titleEl, noteEl };
+			return { tab, el, statusEl, backendEl, titleEl, noteEl, reloadBtn };
 		});
 
-		const add = list.createDiv({ cls: "pi-switcher-row pi-switcher-new suggestion-item mod-complex" });
-		setIcon(add.createDiv({ cls: "suggestion-icon" }), "plus");
-		add.createDiv({ cls: "suggestion-content" }).createDiv({ cls: "suggestion-title", text: "New tab" });
-		add.addEventListener("click", () => {
-			this.close();
-			this.host.newTab();
-		});
+		const addFooter = (cls: string, icon: string, title: string, backend: AgentBackend) => {
+			const row = list.createDiv({ cls });
+			setIcon(row.createDiv({ cls: "suggestion-icon" }), icon);
+			row.createDiv({ cls: "suggestion-content" }).createDiv({ cls: "suggestion-title", text: title });
+			row.addEventListener("click", () => {
+				this.close();
+				this.host.newTab(backend);
+			});
+		};
+		addFooter("pi-switcher-row pi-switcher-new suggestion-item mod-complex", "terminal", "New Pi tab", "pi");
+		addFooter("pi-switcher-row pi-switcher-new-item suggestion-item mod-complex", "sparkles", "New Agy tab", "acp");
 		this.update();
 	}
 

@@ -187,12 +187,12 @@ export class ObsidianControl {
 			.filter((c) => commandAllowed(allowed, c.id))
 			.filter((c) => words.every((w) => c.id.toLowerCase().includes(w) || c.name.toLowerCase().includes(w)))
 			.sort((a, b) => a.name.localeCompare(b.name));
-		const note = allowed.trim() ? undefined : "The user hasn't allowed pi to run any Obsidian commands yet (Pi Workbench settings → Commands pi may run).";
+		const note = allowed.trim() ? undefined : "The user hasn't allowed agents to run any Obsidian commands yet (Agent Workbench settings → Commands agents may run).";
 		return { commands: matching.slice(0, MAX_COMMANDS), total: matching.length, note };
 	}
 
 	private runCommand(id: string): Record<string, unknown> {
-		if (!commandAllowed(this.allowedCommands(), id)) throw new Error(`The user hasn't allowed pi to run ${id}. They can add it under Pi Workbench settings → Commands pi may run.`);
+		if (!commandAllowed(this.allowedCommands(), id)) throw new Error(`The user hasn't allowed agents to run ${id}. They can add it under Agent Workbench settings → Commands agents may run.`);
 		const command = this.allCommands().find((c) => c.id === id);
 		if (!command) throw new Error(`No Obsidian command with id ${id}. Look it up with obsidian_commands.`);
 		const registry = (this.app as CommandsApp).commands;

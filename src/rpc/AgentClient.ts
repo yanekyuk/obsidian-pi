@@ -13,6 +13,11 @@ import type {
 
 export type AgentBackend = "pi" | "acp";
 
+/** Short user-facing name for an agent backend. */
+export function backendLabel(backend: AgentBackend): string {
+	return backend === "acp" ? "Agy" : "Pi";
+}
+
 export interface AgentCapabilities {
 	queueing: boolean;
 	branching: boolean;
