@@ -27,6 +27,28 @@ export interface AgentCapabilities {
 	extensionUi: boolean;
 }
 
+const PI_CAPABILITIES: AgentCapabilities = {
+	queueing: true,
+	branching: true,
+	compaction: true,
+	sessionFiles: true,
+	thinkingLevels: true,
+	extensionUi: true,
+};
+
+const ACP_CAPABILITIES: AgentCapabilities = {
+	queueing: false,
+	branching: false,
+	compaction: false,
+	sessionFiles: false,
+	thinkingLevels: false,
+	extensionUi: false,
+};
+
+export function capabilitiesForBackend(backend: AgentBackend): AgentCapabilities {
+	return { ...(backend === "acp" ? ACP_CAPABILITIES : PI_CAPABILITIES) };
+}
+
 export interface AcpMcpServerStdio {
 	name: string;
 	command: string;

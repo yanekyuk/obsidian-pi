@@ -1,14 +1,15 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import { StringDecoder } from "string_decoder";
-import type {
-	AcpSpawnOptions,
-	AgentBackend,
-	AgentCapabilities,
-	AgentClient,
-	AgentSpawnOptions,
-	EventListener,
-	ExitListener,
-	ReconnectListener,
+import {
+	capabilitiesForBackend,
+	type AcpSpawnOptions,
+	type AgentBackend,
+	type AgentCapabilities,
+	type AgentClient,
+	type AgentSpawnOptions,
+	type EventListener,
+	type ExitListener,
+	type ReconnectListener,
 } from "./AgentClient";
 import type {
 	AgentMessage,
@@ -56,14 +57,7 @@ const LONG_RUNNING_METHODS = new Set(["session/prompt", "session/new", "session/
 
 export class AcpClient implements AgentClient {
 	readonly backend: AgentBackend = "acp";
-	readonly capabilities: AgentCapabilities = {
-		queueing: false,
-		branching: false,
-		compaction: false,
-		sessionFiles: false,
-		thinkingLevels: false,
-		extensionUi: false,
-	};
+	readonly capabilities: AgentCapabilities = capabilitiesForBackend("acp");
 
 	private proc: ChildProcessWithoutNullStreams | null = null;
 	private opts: AcpSpawnOptions | null = null;
@@ -141,11 +135,13 @@ export class AcpClient implements AgentClient {
 			const onSpawn = () => {
 				if (settled) return;
 				settled = true;
+				proc.removeListener("error", onErr);
 				resolve();
 			};
 			const onErr = (err: Error) => {
-				if (settled) {
+				if (!settled) {
 					settled = true;
+					proc.removeListener("spawn", onSpawn);
 					this.proc = null;
 					reject(err);
 				}

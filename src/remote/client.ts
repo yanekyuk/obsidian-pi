@@ -1,5 +1,7 @@
 import * as obsidian from "obsidian";
 import type { InstalledPackage } from "../requirements";
+import type { AgentBackend } from "../rpc/AgentClient";
+import type { PiRemoteSpawnOptions } from "../rpc/PiRpcClient";
 import type { SessionSummary } from "../sessions";
 import type { FileSnapshot } from "../view/revert";
 import type { RemoteSessionOverrides } from "./server";
@@ -141,26 +143,26 @@ export class PiRemoteClient {
 		return res.snapshot;
 	}
 
-	buildSpawnOptions(sessionFile: string | null, overrides: RemoteSessionOverrides): {
+	buildSpawnOptions(
+		sessionFile: string | null,
+		overrides: RemoteSessionOverrides,
+		backend: AgentBackend = "pi",
+	): {
 		binary: string;
 		args: string[];
 		cwd: string;
 		env: NodeJS.ProcessEnv;
-		remote: {
-			wsUrl: string;
-			sessionFile: string | null;
-			overrides: RemoteSessionOverrides;
-			onVaultPath?: (vaultPath: string) => void;
-		};
+		remote: PiRemoteSpawnOptions;
 	} {
 		return {
-			binary: "pi",
+			binary: backend === "acp" ? "agy" : "pi",
 			args: [],
 			cwd: this.cachedVaultPath || "/",
 			env: {},
 			remote: {
 				wsUrl: this.wsUrl("/rpc"),
 				sessionFile,
+				backend,
 				overrides,
 				onVaultPath: (vp) => this.setCachedVaultPath(vp),
 			},

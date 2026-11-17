@@ -4,7 +4,7 @@ A chat panel for the [pi coding agent](https://github.com/earendil-works/pi) and
 
 Each tab runs either **Pi** (`pi --mode rpc`) or **Agy** (`agy acp`) and displays a `Pi` or `Agy` badge in the toolbar and tab switcher. Choose your default backend in **Settings → Agent Workbench → Agent backend**, or open either backend directly from the tab switcher or `⋮` menu.
 
-Desktop and mobile: on desktop the plugin starts `pi` or `agy acp` as a child process; on Obsidian Mobile it connects to a desktop Obsidian instance over Tailscale or LAN for Pi tabs (see [Obsidian Mobile](#obsidian-mobile)). Developed and used on macOS; Linux should work the same way; Windows is untested. This is a community project, not affiliated with pi's authors, Antigravity, or Obsidian.
+Desktop and mobile: on desktop the plugin starts `pi` or `agy acp` as a child process; on Obsidian Mobile it connects to a desktop Obsidian instance over Tailscale or LAN for both Pi and Agy tabs (see [Obsidian Mobile](#obsidian-mobile)). Developed and used on macOS; Linux should work the same way; Windows is untested. This is a community project, not affiliated with pi's authors, Antigravity, or Obsidian.
 
 ## Before you install
 
@@ -110,14 +110,14 @@ There is no custom compaction: pi's own summary already carries the lists of fil
 
 ## Obsidian Mobile
 
-Obsidian Mobile cannot run Node.js child processes directly. Instead, desktop Obsidian can host a server over Tailscale (or your local network) so your phone uses the desktop machine's `pi`.
+Obsidian Mobile cannot run Node.js child processes directly. Instead, desktop Obsidian can host a server over Tailscale (or your local network) so your phone uses the desktop machine's `pi` and `agy acp`.
 
 1. Connect the desktop machine and your phone to the same Tailscale network, and sync the vault between them (with Obsidian Sync, iCloud, Syncthing, or rclone).
 2. In desktop Obsidian, open **Settings → Agent Workbench → Mobile server** and switch on **Host server for Obsidian Mobile**.
 3. Copy the shown WebSocket URL (for example `ws://100.x.y.z:31415`) and the access token.
 4. In Obsidian Mobile, open **Settings → Agent Workbench → Remote server**, paste the Server URL and Access token, and tap **Test connection**.
 
-On mobile, `pi` runs in the desktop vault folder while the panel, session browser, question cards, task list, `/btw` side questions, undo/redo, and `obsidian_*` tools (`obsidian_search`, `obsidian_note_info`, `obsidian_open`, `obsidian_set_properties`) run natively in Obsidian Mobile. The desktop server tracks sessions opened from mobile so two `pi` processes never write to the same session file at once.
+On mobile, `pi` and `agy acp` run in the desktop vault folder while the panel, session browser, question cards, task list, `/btw` side questions, undo/redo, and (for Pi tabs) `obsidian_*` tools (`obsidian_search`, `obsidian_note_info`, `obsidian_open`, `obsidian_set_properties`) run natively in Obsidian Mobile; for Agy tabs, Obsidian tools are served by desktop's localhost MCP bridge. The desktop server tracks sessions opened from mobile so two agents never open the same session at once.
 
 ## Web viewer
 

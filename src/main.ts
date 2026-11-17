@@ -201,6 +201,7 @@ export default class PiAgentPlugin extends Plugin {
 				heldSessionFiles: () => this.heldSessionFiles(),
 				isSessionHeld: (file) => this.isSessionHeld(file),
 				buildSpawnOptions: (file, overrides) => this.buildLocalSpawnOptions(file, overrides),
+				buildAcpSpawnOptions: (file, overrides) => this.buildAcpSpawnOptions(file, overrides),
 				piCommand: () => this.piCommand(),
 				installedPackages: () => this.requirements.installed(),
 				trashSession: (path) => shell.trashItem(path),
@@ -274,6 +275,7 @@ export default class PiAgentPlugin extends Plugin {
 
 	async sessionExists(path: string): Promise<boolean> {
 		if (!path) return false;
+		if (path.startsWith("acp:")) return true;
 		return this.isRemote ? this.remoteClient.sessionExists(path) : existsSync(path);
 	}
 
@@ -542,37 +544,44 @@ export default class PiAgentPlugin extends Plugin {
 	}
 
 	async buildSpawnOptions(sessionFile: string | null, backend: AgentBackend = this.settings.backend): Promise<AgentSpawnOptions> {
-		if (backend === "acp") return this.buildAcpSpawnOptions(sessionFile);
 		if (this.isRemote) {
 			const s = this.settings;
-			return this.remoteClient.buildSpawnOptions(sessionFile, {
-				model: s.model,
-				systemPromptAddendum: s.systemPromptAddendum,
-				extraArgs: s.extraArgs,
-				browserControl: s.browserControl && this.hasLocalFs,
-				obsidianControl: s.obsidianControl,
-				trimToolOutput: s.trimToolOutput,
-			});
+			return this.remoteClient.buildSpawnOptions(
+				sessionFile,
+				{
+					model: s.model,
+					systemPromptAddendum: s.systemPromptAddendum,
+					extraArgs: s.extraArgs,
+					browserControl: s.browserControl && this.hasLocalFs,
+					obsidianControl: s.obsidianControl,
+					trimToolOutput: s.trimToolOutput,
+				},
+				backend,
+			);
 		}
+		if (backend === "acp") return this.buildAcpSpawnOptions(sessionFile);
 		return this.buildLocalSpawnOptions(sessionFile);
 	}
 
-	private async buildAcpSpawnOptions(sessionFile: string | null): Promise<AcpSpawnOptions> {
-		if (this.isRemote) {
-			throw new Error("Agy is only supported on desktop with local filesystem access.");
-		}
+	private async buildAcpSpawnOptions(sessionFile: string | null, overrides?: RemoteSessionOverrides): Promise<AcpSpawnOptions> {
+		if (!overrides && sessionFile) await this.remoteServer?.reclaimDetachedSession(sessionFile);
 		const s = this.settings;
 		const env = await resolveEnv();
-		const mcp = await this.mcpBridge.stdioConfig();
+		const mcp = await this.mcpBridge.stdioConfig({
+			obsidianControl: overrides?.obsidianControl,
+			browserControl: overrides?.browserControl,
+		});
 		const sessionId = sessionFile?.startsWith("acp:") ? sessionFile.slice(4) : null;
+		const model = overrides?.model ?? s.model;
+		const addendum = overrides?.systemPromptAddendum ?? s.systemPromptAddendum;
 		return {
 			binary: s.agyPath,
 			args: s.agyArgs.split(/\s+/).filter(Boolean),
 			cwd: this.vaultPath,
 			env,
 			sessionId,
-			model: s.model || undefined,
-			systemPromptAppend: buildSystemPrompt(this.app.vault.getName(), s.systemPromptAddendum),
+			model: model || undefined,
+			systemPromptAppend: buildSystemPrompt(this.app.vault.getName(), addendum),
 			skipPermissions: s.agySkipPermissions,
 			mcpServers: mcp ? [mcp] : [],
 		};

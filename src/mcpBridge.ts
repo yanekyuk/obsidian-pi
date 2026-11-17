@@ -149,13 +149,14 @@ const http = require("http");
 const readline = require("readline");
 const port = Number(process.argv[1]);
 const token = process.argv[2];
+const path = process.argv[3] || "/mcp";
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 rl.on("line", (line) => {
   if (!line.trim()) return;
   const req = http.request({
     hostname: "127.0.0.1",
     port,
-    path: "/mcp",
+    path,
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -202,14 +203,17 @@ export class ObsidianMcpBridge {
 		return this.port;
 	}
 
-	async stdioConfig(): Promise<AcpMcpServerStdio | null> {
-		const opts = this.options();
-		if (!opts.obsidianControl && !opts.browserControl) return null;
+	async stdioConfig(overrides?: { obsidianControl?: boolean; browserControl?: boolean }): Promise<AcpMcpServerStdio | null> {
+		const base = this.options();
+		const obsidianControl = overrides?.obsidianControl ?? base.obsidianControl;
+		const browserControl = overrides?.browserControl ?? base.browserControl;
+		if (!obsidianControl && !browserControl) return null;
 		const port = await this.ensureStarted();
+		const path = `/mcp?obsidian=${obsidianControl ? "1" : "0"}&browser=${browserControl ? "1" : "0"}`;
 		return {
 			name: "obsidian",
 			command: process.execPath,
-			args: ["-e", STDIO_SHIM, String(port), this.token],
+			args: ["-e", STDIO_SHIM, String(port), this.token, path],
 			env: [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }],
 		};
 	}
@@ -220,11 +224,23 @@ export class ObsidianMcpBridge {
 		this.port = 0;
 	}
 
+	private effectiveOptions(url: URL): { obsidianControl: boolean; browserControl: boolean } {
+		const base = this.options();
+		const obs = url.searchParams.get("obsidian");
+		const bro = url.searchParams.get("browser");
+		return {
+			obsidianControl: obs === null ? base.obsidianControl : obs === "1",
+			browserControl: bro === null ? base.browserControl : bro === "1",
+		};
+	}
+
 	private async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		if (req.method !== "POST" || req.url !== "/mcp" || req.headers.authorization !== `Bearer ${this.token}`) {
+		const url = new URL(req.url ?? "/", "http://127.0.0.1");
+		if (req.method !== "POST" || url.pathname !== "/mcp" || req.headers.authorization !== `Bearer ${this.token}`) {
 			res.writeHead(403).end();
 			return;
 		}
+		const opts = this.effectiveOptions(url);
 		let raw = "";
 		for await (const chunk of req) raw += chunk;
 		let msg: { id?: unknown; method?: string; params?: Record<string, unknown> };
@@ -259,7 +275,6 @@ export class ObsidianMcpBridge {
 				});
 			}
 			if (msg.method === "tools/list") {
-				const opts = this.options();
 				const tools = [
 					...(opts.obsidianControl ? OBSIDIAN_TOOLS : []),
 					...(opts.browserControl ? BROWSER_TOOLS : []),
@@ -269,7 +284,7 @@ export class ObsidianMcpBridge {
 			if (msg.method === "tools/call") {
 				const name = String(msg.params?.name ?? "");
 				const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;
-				const result = await this.callTool(name, args);
+				const result = await this.callTool(name, args, opts);
 				return reply(result);
 			}
 			return fail(-32601, `Method not found: ${msg.method ?? ""}`);
@@ -278,8 +293,11 @@ export class ObsidianMcpBridge {
 		}
 	}
 
-	private async callTool(name: string, args: Record<string, unknown>): Promise<{ content: unknown[]; isError?: boolean }> {
-		const opts = this.options();
+	private async callTool(
+		name: string,
+		args: Record<string, unknown>,
+		opts: { obsidianControl: boolean; browserControl: boolean },
+	): Promise<{ content: unknown[]; isError?: boolean }> {
 		if (name.startsWith("obsidian_")) {
 			if (!opts.obsidianControl) return { content: [{ type: "text", text: "Obsidian tools are disabled in settings." }], isError: true };
 			const action = name.slice("obsidian_".length);

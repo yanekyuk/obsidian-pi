@@ -10,7 +10,7 @@
 
 import esbuild from "esbuild";
 import { spawn } from "child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, chmodSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -795,6 +795,178 @@ const check = (ok, label, detail = "") => {
 			normalizeWsUrl("http://100.64.1.2:31415", "/rpc", "abc") === "ws://100.64.1.2:31415/rpc?token=abc",
 		"remote URLs: bare Tailscale IPs, ws:// and http:// normalize cleanly",
 	);
+
+	// Remote Agy (ACP) over WebSocket using a mock `agy acp` script
+	const mockAgyScript = join(work, "mock-agy.mjs");
+	const mockAgyBin = join(work, "mock-agy");
+	writeFileSync(
+		mockAgyScript,
+		`import * as readline from "readline";
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+let activeSession = "mock-acp-1";
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+rl.on("line", (line) => {
+	if (!line.trim()) return;
+	const msg = JSON.parse(line);
+	if (msg.method === "initialize") {
+		send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
+	} else if (msg.method === "session/new") {
+		send({
+			jsonrpc: "2.0",
+			id: msg.id,
+			result: {
+				sessionId: activeSession,
+				models: {
+					availableModels: [{ modelId: "gemini-3.8-pro", name: "Gemini 3.8 Pro" }],
+					currentModelId: "gemini-3.8-pro",
+				},
+			},
+		});
+	} else if (msg.method === "session/load") {
+		activeSession = msg.params?.sessionId || activeSession;
+		send({
+			jsonrpc: "2.0",
+			id: msg.id,
+			result: {
+				sessionId: activeSession,
+				models: {
+					availableModels: [{ modelId: "gemini-3.8-pro", name: "Gemini 3.8 Pro" }],
+					currentModelId: "gemini-3.8-pro",
+				},
+			},
+		});
+	} else if (msg.method === "session/prompt") {
+		const promptId = msg.id;
+		send({
+			jsonrpc: "2.0",
+			method: "session/update",
+			params: { update: { sessionUpdate: "agent_thought_chunk", content: [{ type: "text", text: "Thinking..." }] } },
+		});
+		send({
+			jsonrpc: "2.0",
+			method: "session/update",
+			params: { update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read file", rawInput: { path: "note.md" } } },
+		});
+		send({
+			jsonrpc: "2.0",
+			id: 9001,
+			method: "session/request_permission",
+			params: {
+				toolCall: { title: "Allow Read file?" },
+				options: [
+					{ optionId: "allow", name: "Allow once", kind: "allow_once" },
+					{ optionId: "deny", name: "Deny", kind: "reject_once" },
+				],
+			},
+		});
+		const onPerm = (permLine) => {
+			if (!permLine.trim()) return;
+			const resp = JSON.parse(permLine);
+			if (resp.id !== 9001) return;
+			rl.off("line", onPerm);
+			send({
+				jsonrpc: "2.0",
+				method: "session/update",
+				params: { update: { sessionUpdate: "tool_call_update", toolCallId: "tc-1", status: "completed", rawOutput: "ok" } },
+			});
+			send({
+				jsonrpc: "2.0",
+				method: "session/update",
+				params: { update: { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Remote Agy reply" }] } },
+			});
+			send({ jsonrpc: "2.0", id: promptId, result: { stopReason: "end_turn" } });
+		};
+		rl.on("line", onPerm);
+	}
+});
+`,
+	);
+	writeFileSync(mockAgyBin, `#!/bin/sh\nexec "${process.execPath}" "${mockAgyScript}" "$@"\n`);
+	chmodSync(mockAgyBin, 0o755);
+	const acpServerToken = generateServerToken();
+	let acpServerRef = null;
+	const acpServer = new PiRemoteServer({
+		vaultName: () => "AcpVault",
+		vaultPath: () => work,
+		enabledModelPatterns: async () => [],
+		sessionDirectories: () => [],
+		lastSessionFile: () => "",
+		heldSessionFiles: () => acpServerRef?.heldSessionFiles() ?? [],
+		isSessionHeld: (file) => Boolean(acpServerRef?.isSessionHeld(file)),
+		buildSpawnOptions: async () => {
+			throw new Error("Pi not used in ACP test");
+		},
+		buildAcpSpawnOptions: async (sessionFile) => ({
+			binary: mockAgyBin,
+			args: [],
+			cwd: work,
+			env: process.env,
+			sessionId: sessionFile?.startsWith("acp:") ? sessionFile.slice(4) : null,
+			skipPermissions: false,
+			mcpServers: [],
+		}),
+		piCommand: async () => ({ binary: "pi", env: process.env, cwd: work }),
+		installedPackages: async () => [],
+		trashSession: async () => {},
+		swapVersion: async (snap) => snap,
+	});
+	acpServerRef = acpServer;
+	const acpPort = await acpServer.start({ port: 0, bindHost: "127.0.0.1", token: acpServerToken });
+	const acpRemote = new PiRemoteClient(() => ({ url: `ws://127.0.0.1:${acpPort}`, token: acpServerToken }));
+	const acpRpc = new PiRpcClient("acp");
+	const acpEvents = [];
+	acpRpc.onEvent((e) => {
+		acpEvents.push(e);
+		if (e.type === "extension_ui_request") {
+			acpRpc.respondToUi(e.id, { value: "Allow once" });
+		}
+	});
+	await acpRpc.start(acpRemote.buildSpawnOptions(null, {}, "acp"));
+	const acpState = await acpRpc.getState();
+	check(
+		acpRpc.running && acpRpc.backend === "acp" && !acpRpc.capabilities.queueing && acpState.sessionFile === "acp:mock-acp-1" && acpState.model?.id === "gemini-3.8-pro",
+		"remote Agy: PiRpcClient('acp') connects over WebSocket and initializes ACP session",
+	);
+	check(acpServer.isSessionHeld("acp:mock-acp-1") && (await acpRemote.sessionExists("acp:mock-acp-1")), "remote Agy: tracks held acp session and session_exists returns true");
+
+	const acpDup = new PiRpcClient("acp");
+	let acpConflict = false;
+	await acpDup.start(acpRemote.buildSpawnOptions("acp:mock-acp-1", {}, "acp")).catch(() => (acpConflict = true));
+	check(acpConflict, "remote Agy: prevents a second client from opening an already held acp session");
+
+	const acpSettled = new Promise((res) => acpRpc.onEvent((e) => e.type === "agent_settled" && res()));
+	await acpRpc.prompt("hello agy");
+	await Promise.race([acpSettled, new Promise((_, rej) => setTimeout(() => rej(new Error("timed out waiting for remote Agy turn")), 5000))]);
+	const acpMsgs = await acpRpc.getMessages();
+	const acpReplyText = acpMsgs.find((m) => m.role === "assistant")?.content?.find((b) => b.type === "text")?.text ?? "";
+	check(
+		acpEvents.some((e) => e.type === "extension_ui_request") &&
+			acpEvents.some((e) => e.type === "tool_execution_end" && !e.isError) &&
+			acpReplyText === "Remote Agy reply",
+		"remote Agy: streams tool calls, forwards permission prompts, and records reply",
+	);
+
+	let acpUnexpectedExit = false;
+	let acpReattached = null;
+	acpRpc.onExit((info) => {
+		if (!info.expected) acpUnexpectedExit = true;
+	});
+	const acpReconnected = new Promise((res) => {
+		acpRpc.onReconnected((reattached) => {
+			acpReattached = reattached;
+			acpRpc.finishRemoteSync();
+			res();
+		});
+	});
+	acpRpc.ws.close();
+	const acpStateAfterReconnect = await acpRpc.getState();
+	await acpReconnected;
+	check(
+		!acpUnexpectedExit && acpReattached === true && acpStateAfterReconnect.sessionFile === "acp:mock-acp-1",
+		"remote Agy: unexpected WebSocket drop auto-reconnects and reattaches to running ACP session",
+	);
+	await acpRpc.stop();
+	await acpServer.stop();
 }
 
 console.log(`inherited PATH: ${process.env.PATH}`);

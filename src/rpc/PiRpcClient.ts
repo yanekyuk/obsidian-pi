@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import { StringDecoder } from "string_decoder";
-import type { AgentBackend, AgentCapabilities, AgentClient } from "./AgentClient";
+import { capabilitiesForBackend, type AgentBackend, type AgentCapabilities, type AgentClient } from "./AgentClient";
 import type {
 	AgentMessage,
 	ImageContent,
@@ -17,6 +17,7 @@ import type {
 export interface PiRemoteSpawnOptions {
 	wsUrl: string;
 	sessionFile: string | null;
+	backend?: AgentBackend;
 	overrides?: object;
 	onVaultPath?: (vaultPath: string) => void;
 }
@@ -63,15 +64,13 @@ const PING_TIMEOUT_MS = 3_000;
 const STDERR_TAIL = 4000;
 
 export class PiRpcClient implements AgentClient {
-	readonly backend: AgentBackend = "pi";
-	readonly capabilities: AgentCapabilities = {
-		queueing: true,
-		branching: true,
-		compaction: true,
-		sessionFiles: true,
-		thinkingLevels: true,
-		extensionUi: true,
-	};
+	readonly backend: AgentBackend;
+	readonly capabilities: AgentCapabilities;
+
+	constructor(backend: AgentBackend = "pi") {
+		this.backend = backend;
+		this.capabilities = capabilitiesForBackend(backend);
+	}
 	private readonly clientId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 	private proc: ChildProcessWithoutNullStreams | null = null;
 	private ws: WebSocket | null = null;
@@ -201,6 +200,7 @@ export class PiRpcClient implements AgentClient {
 				ws.send(JSON.stringify({
 					type: "pi_workbench_init",
 					clientId: this.clientId,
+					backend: remote.backend ?? this.backend,
 					sessionFile: remote.sessionFile,
 					overrides: remote.overrides,
 				}));

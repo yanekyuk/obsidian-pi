@@ -170,7 +170,7 @@ export class ChatSession {
 		initial: { sessionFile: string | null; title?: string; backend?: AgentBackend },
 	) {
 		this.backend = initial.backend ?? (initial.sessionFile?.startsWith("acp:") ? "acp" : host.plugin.settings.backend);
-		this.client = this.backend === "acp" ? new AcpClient() : new PiRpcClient();
+		this.client = this.backend === "acp" && !host.plugin.isRemote ? new AcpClient() : new PiRpcClient(this.backend);
 		this.sessionFile = initial.sessionFile;
 		this.savedTitle = initial.title ?? "";
 		this.shareNote = host.plugin.settings.includeActiveNote;
@@ -759,8 +759,9 @@ export class ChatSession {
 		try {
 			await this.syncSession({ preserveDialogs: true });
 			if (!this.suggest.commands.length) {
-				const fromPi = (await this.client.getCommands()).filter((c) => c.name !== TREE_COMMAND);
-				this.suggest.commands = [...PANEL_COMMANDS.filter((c) => !fromPi.some((p) => p.name === c.name)), ...fromPi];
+				const fromAgent = (await this.client.getCommands()).filter((c) => c.name !== TREE_COMMAND);
+				const panelCmds = this.client.capabilities.compaction ? PANEL_COMMANDS : PANEL_COMMANDS.filter((c) => c.name !== "compact");
+				this.suggest.commands = [...panelCmds.filter((c) => !fromAgent.some((p) => p.name === c.name)), ...fromAgent];
 				this.renderEmptyState();
 			}
 		} catch {

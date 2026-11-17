@@ -8,7 +8,10 @@ import { readAdvisorConfig, writeAdvisorConfig } from "../advisor";
 import { unusableMcpServers } from "../mcp";
 import { resolveLinked } from "../noteLink";
 import type { InstalledPackage } from "../requirements";
+import { AcpClient } from "../rpc/AcpClient";
+import type { AcpSpawnOptions, AgentBackend } from "../rpc/AgentClient";
 import type { PiSpawnOptions } from "../rpc/PiRpcClient";
+import type { ImageContent, ThinkingLevel } from "../rpc/types";
 import { listSessions } from "../sessions";
 import { snapshotAfter, snapshotBefore, unchangedSince, type FileSnapshot } from "../view/revert";
 import { acceptWebSocket, ServerWebSocket, tokensMatch } from "./ws";
@@ -38,6 +41,7 @@ export interface RemoteServerHost {
 	heldSessionFiles(): string[];
 	isSessionHeld(sessionFile: string): boolean;
 	buildSpawnOptions(sessionFile: string | null, overrides?: RemoteSessionOverrides): Promise<PiSpawnOptions>;
+	buildAcpSpawnOptions?(sessionFile: string | null, overrides?: RemoteSessionOverrides): Promise<AcpSpawnOptions>;
 	piCommand(): Promise<{ binary: string; env: NodeJS.ProcessEnv; cwd: string }>;
 	installedPackages(): Promise<InstalledPackage[]>;
 	trashSession(path: string): Promise<void>;
@@ -52,9 +56,11 @@ interface ActiveToolStream {
 
 interface ActiveRemoteSession {
 	id: number;
+	backend: AgentBackend;
 	clientId: string;
 	sessionFile: string | null;
 	proc: ChildProcessWithoutNullStreams | null;
+	acp: AcpClient | null;
 	ws: ServerWebSocket | null;
 	stopping: boolean;
 	busy: boolean;
@@ -254,7 +260,7 @@ export class PiRemoteServer {
 			}
 			case "session_exists": {
 				const path = typeof payload.path === "string" ? payload.path : "";
-				return { exists: Boolean(path && existsSync(path)) };
+				return { exists: Boolean(path && (path.startsWith("acp:") || existsSync(path))) };
 			}
 			case "resolve_linked": {
 				const value = typeof payload.value === "string" ? payload.value : "";
@@ -427,9 +433,40 @@ export class PiRemoteServer {
 		}
 	}
 
+	private isSessionAlive(entry: ActiveRemoteSession): boolean {
+		return Boolean(entry.proc || entry.acp?.running);
+	}
+
+	private abortInit(entry: ActiveRemoteSession, error: string, reason = "Init failed"): void {
+		this.clearTimers(entry);
+		this.sessions.delete(entry.id);
+		this.host.onSessionsChanged?.();
+		entry.ws?.send(JSON.stringify({ type: "pi_workbench_error", error }));
+		entry.ws?.close(1011, reason);
+	}
+
+	private finishSessionExit(entry: ActiveRemoteSession, code: number | null, stderr: string, expected: boolean): void {
+		this.clearTimers(entry);
+		this.sessions.delete(entry.id);
+		entry.proc = null;
+		entry.acp = null;
+		this.host.onSessionsChanged?.();
+		const attached = entry.ws;
+		entry.ws = null;
+		if (!attached) return;
+		attached.send(JSON.stringify({
+			type: "pi_workbench_exit",
+			code,
+			stderr: stderr.trim(),
+			expected,
+		}));
+		attached.close(1000, `${entry.backend === "acp" ? "agy" : "pi"} exited`);
+	}
+
 	private async handleClientMessage(entry: ActiveRemoteSession, ws: ServerWebSocket, text: string): Promise<void> {
+		let parsed: Record<string, unknown> | null = null;
 		try {
-			const parsed = JSON.parse(text) as { id?: string; type?: string; sessionPath?: string };
+			parsed = JSON.parse(text) as Record<string, unknown>;
 			if (parsed.type === "pi_workbench_ping") {
 				ws.send(JSON.stringify({ type: "pi_workbench_pong" }));
 				return;
@@ -453,6 +490,10 @@ export class PiRemoteServer {
 			if (parsed.type === "get_messages" && entry.suppressEvents && typeof parsed.id === "string") {
 				entry.syncMessagesReqId = parsed.id;
 			}
+			if (entry.acp) {
+				await this.handleAcpClientMessage(entry, parsed);
+				return;
+			}
 			if (parsed.type === "switch_session" && typeof parsed.sessionPath === "string") {
 				await this.reclaimDetachedSession(parsed.sessionPath, entry.id);
 				if (this.host.isSessionHeld(parsed.sessionPath) && entry.sessionFile !== parsed.sessionPath) {
@@ -475,6 +516,118 @@ export class PiRemoteServer {
 		entry.proc.stdin.write(text + "\n");
 	}
 
+	private async handleAcpClientMessage(entry: ActiveRemoteSession, parsed: Record<string, unknown>): Promise<void> {
+		const acp = entry.acp;
+		if (!acp) return;
+		const type = typeof parsed.type === "string" ? parsed.type : "";
+		const id = typeof parsed.id === "string" ? parsed.id : undefined;
+
+		if (type === "extension_ui_response" && id) {
+			acp.respondToUi(id, parsed as unknown as { value: string } | { confirmed: boolean } | { cancelled: true });
+			return;
+		}
+
+		const reply = (success: boolean, data?: unknown, error?: string) => {
+			const line = JSON.stringify(
+				success ? { type: "response", id, command: type, success: true, data } : { type: "response", id, command: type, success: false, error },
+			);
+			this.handleStdoutLine(entry, line);
+		};
+
+		try {
+			switch (type) {
+				case "prompt":
+				case "steer":
+				case "follow_up": {
+					if (!acp.running) throw new Error("Agy is not running.");
+					const st = await acp.getState();
+					if (!st.sessionId) throw new Error("No active ACP session.");
+					const message = typeof parsed.message === "string" ? parsed.message : "";
+					const images = Array.isArray(parsed.images) ? (parsed.images as ImageContent[]) : undefined;
+					const streamingBehavior =
+						type === "steer" ? "steer" : type === "follow_up" ? "followUp" : (parsed.streamingBehavior as "steer" | "followUp" | undefined);
+					void acp.prompt(message, { streamingBehavior, images }).catch(() => {});
+					reply(true);
+					return;
+				}
+				case "abort":
+					await acp.abort();
+					reply(true);
+					return;
+				case "clear_queue":
+					reply(true, await acp.clearQueue());
+					return;
+				case "get_state":
+					reply(true, await acp.getState());
+					return;
+				case "get_messages":
+					reply(true, { messages: await acp.getMessages() });
+					return;
+				case "get_commands":
+					reply(true, { commands: await acp.getCommands() });
+					return;
+				case "get_available_models":
+					reply(true, { models: await acp.getAvailableModels() });
+					return;
+				case "set_model":
+					reply(true, await acp.setModel(String(parsed.provider ?? ""), String(parsed.modelId ?? "")));
+					return;
+				case "get_available_thinking_levels":
+					reply(true, { levels: await acp.getAvailableThinkingLevels() });
+					return;
+				case "set_thinking_level":
+					await acp.setThinkingLevel(parsed.level as ThinkingLevel);
+					reply(true);
+					return;
+				case "get_session_stats":
+					reply(true, await acp.getSessionStats());
+					return;
+				case "new_session": {
+					const res = await acp.newSession();
+					const state = await acp.getState().catch(() => null);
+					entry.sessionFile = state?.sessionFile ?? null;
+					this.host.onSessionsChanged?.();
+					reply(true, res);
+					return;
+				}
+				case "switch_session": {
+					const sessionPath = typeof parsed.sessionPath === "string" ? parsed.sessionPath : "";
+					await this.reclaimDetachedSession(sessionPath, entry.id);
+					if (this.host.isSessionHeld(sessionPath) && entry.sessionFile !== sessionPath) {
+						reply(false, undefined, "That session is already open in another tab or device.");
+						return;
+					}
+					const res = await acp.switchSession(sessionPath);
+					const state = await acp.getState().catch(() => null);
+					entry.sessionFile = state?.sessionFile ?? (sessionPath || null);
+					this.host.onSessionsChanged?.();
+					reply(true, res);
+					return;
+				}
+				case "set_session_name":
+					await acp.setSessionName(String(parsed.name ?? ""));
+					reply(true);
+					return;
+				case "clone":
+					reply(true, await acp.cloneSession());
+					return;
+				case "fork":
+					reply(true, await acp.fork(String(parsed.entryId ?? "")));
+					return;
+				case "get_entries":
+					reply(true, await acp.getEntries());
+					return;
+				case "compact":
+					reply(true, await acp.compact(typeof parsed.customInstructions === "string" ? parsed.customInstructions : undefined));
+					return;
+				default:
+					reply(false, undefined, `Unsupported command for Agy: ${type}`);
+			}
+		} catch (err) {
+			reply(false, undefined, (err as Error).message || String(err));
+		}
+	}
+
 	private handleRpcSocket(ws: ServerWebSocket): void {
 		let initialized = false;
 		ws.onMessage((text) => {
@@ -486,7 +639,7 @@ export class PiRemoteServer {
 	}
 
 	private async initRpcSession(ws: ServerWebSocket, initText: string): Promise<void> {
-		let init: { type?: string; clientId?: string; sessionFile?: string | null; overrides?: RemoteSessionOverrides };
+		let init: { type?: string; clientId?: string; backend?: AgentBackend; sessionFile?: string | null; overrides?: RemoteSessionOverrides };
 		try {
 			init = JSON.parse(initText) as typeof init;
 		} catch {
@@ -495,14 +648,15 @@ export class PiRemoteServer {
 			return;
 		}
 
+		const backend: AgentBackend = init.backend === "acp" ? "acp" : "pi";
 		const clientId = typeof init.clientId === "string" && init.clientId ? init.clientId : "";
 		const requested = typeof init.sessionFile === "string" && init.sessionFile ? init.sessionFile : null;
-		const usable = requested && existsSync(requested) ? requested : null;
+		const usable = requested && (backend === "acp" ? requested.startsWith("acp:") : existsSync(requested)) ? requested : null;
 
 		if (clientId) {
-			const existing = [...this.sessions.values()].find((s) => s.clientId === clientId);
+			const existing = [...this.sessions.values()].find((s) => s.clientId === clientId && s.backend === backend);
 			if (existing) {
-				if (existing.proc && !existing.stopping && (!usable || !existing.sessionFile || existing.sessionFile === usable)) {
+				if (this.isSessionAlive(existing) && !existing.stopping && (!usable || !existing.sessionFile || existing.sessionFile === usable)) {
 					this.attachSocket(existing, ws, true);
 					return;
 				}
@@ -514,7 +668,7 @@ export class PiRemoteServer {
 
 		if (usable) {
 			const detached = [...this.sessions.values()].find(
-				(s) => s.sessionFile === usable && s.ws === null && s.proc !== null && !s.stopping,
+				(s) => s.backend === backend && s.sessionFile === usable && s.ws === null && this.isSessionAlive(s) && !s.stopping,
 			);
 			if (detached) {
 				if (clientId) detached.clientId = clientId;
@@ -531,6 +685,13 @@ export class PiRemoteServer {
 
 		const id = this.nextSessionId++;
 		const stopProc = async (): Promise<void> => {
+			if (entry.acp) {
+				const acp = entry.acp;
+				entry.acp = null;
+				entry.stopping = true;
+				await acp.stop().catch(() => {});
+				return;
+			}
 			const current = entry.proc;
 			if (!current) return;
 			entry.proc = null;
@@ -547,9 +708,11 @@ export class PiRemoteServer {
 
 		const entry: ActiveRemoteSession = {
 			id,
+			backend,
 			clientId,
 			sessionFile: usable,
 			proc: null,
+			acp: null,
 			ws: null,
 			stopping: false,
 			busy: false,
@@ -577,15 +740,16 @@ export class PiRemoteServer {
 		this.attachSocket(entry, ws, false);
 		this.host.onSessionsChanged?.();
 
+		if (backend === "acp") {
+			await this.startAcpSession(entry, usable, init.overrides);
+			return;
+		}
+
 		let opts: PiSpawnOptions;
 		try {
 			opts = await this.host.buildSpawnOptions(usable, init.overrides);
 		} catch (err) {
-			this.clearTimers(entry);
-			this.sessions.delete(entry.id);
-			this.host.onSessionsChanged?.();
-			ws.send(JSON.stringify({ type: "pi_workbench_error", error: (err as Error).message }));
-			ws.close(1011, "Spawn config failed");
+			this.abortInit(entry, (err as Error).message, "Spawn config failed");
 			return;
 		}
 
@@ -609,13 +773,7 @@ export class PiRemoteServer {
 		});
 
 		child.once("error", (err) => {
-			if (!spawned) {
-				this.clearTimers(entry);
-				this.sessions.delete(entry.id);
-				this.host.onSessionsChanged?.();
-				entry.ws?.send(JSON.stringify({ type: "pi_workbench_error", error: err.message }));
-				entry.ws?.close(1011, "Spawn failed");
-			}
+			if (!spawned) this.abortInit(entry, err.message, "Spawn failed");
 		});
 
 		const decoder = new StringDecoder("utf8");
@@ -638,21 +796,69 @@ export class PiRemoteServer {
 		child.stdin.on("error", () => {});
 
 		child.once("exit", (code) => {
-			this.clearTimers(entry);
-			this.sessions.delete(entry.id);
-			entry.proc = null;
-			this.host.onSessionsChanged?.();
-			const attached = entry.ws;
-			entry.ws = null;
-			if (!attached) return;
-			attached.send(JSON.stringify({
-				type: "pi_workbench_exit",
-				code,
-				stderr: entry.stderrTail.trim(),
-				expected: entry.stopping,
-			}));
-			attached.close(1000, "pi exited");
+			this.finishSessionExit(entry, code, entry.stderrTail, entry.stopping);
 		});
+	}
+
+	private async startAcpSession(
+		entry: ActiveRemoteSession,
+		usable: string | null,
+		overrides?: RemoteSessionOverrides,
+	): Promise<void> {
+		if (!this.host.buildAcpSpawnOptions) {
+			this.abortInit(entry, "Remote Agy sessions are not supported by this server.", "Agy unsupported");
+			return;
+		}
+
+		let opts: AcpSpawnOptions;
+		try {
+			opts = await this.host.buildAcpSpawnOptions(usable, overrides);
+		} catch (err) {
+			this.abortInit(entry, (err as Error).message, "Spawn config failed");
+			return;
+		}
+
+		if (!this.sessions.has(entry.id) || entry.stopping) return;
+
+		const acp = new AcpClient();
+		entry.acp = acp;
+		const offEvent = acp.onEvent((event) => {
+			this.handleStdoutLine(entry, JSON.stringify(event));
+		});
+		const offExit = acp.onExit((info) => {
+			offEvent();
+			offExit();
+			this.finishSessionExit(entry, info.code, info.stderr, info.expected || entry.stopping);
+		});
+
+		try {
+			await acp.start(opts);
+		} catch (err) {
+			offEvent();
+			offExit();
+			entry.acp = null;
+			this.abortInit(entry, (err as Error).message, "Spawn failed");
+			return;
+		}
+
+		if (!this.sessions.has(entry.id) || entry.stopping) {
+			offEvent();
+			offExit();
+			entry.acp = null;
+			await acp.stop().catch(() => {});
+			return;
+		}
+
+		const state = await acp.getState().catch(() => null);
+		if (state?.sessionFile) {
+			entry.sessionFile = state.sessionFile;
+			this.host.onSessionsChanged?.();
+		}
+		entry.ws?.send(JSON.stringify({
+			type: "pi_workbench_ready",
+			sessionFile: entry.sessionFile,
+			vaultPath: this.host.vaultPath(),
+		}));
 	}
 
 	private handleStdoutLine(entry: ActiveRemoteSession, line: string): void {
