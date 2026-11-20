@@ -53,6 +53,7 @@ interface TrackedToolCall {
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const STDERR_TAIL = 4000;
+const UNSOLICITED_SETTLE_MS = 2500;
 const LONG_RUNNING_METHODS = new Set(["session/prompt", "session/new", "session/load"]);
 
 export class AcpClient implements AgentClient {
@@ -76,6 +77,8 @@ export class AcpClient implements AgentClient {
 	private messages: AgentMessage[] = [];
 	private isStreaming = false;
 	private replayingHistory = false;
+	private unsolicitedTurn = false;
+	private unsolicitedTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// Per-turn streaming accumulators for translating ACP updates into pi-workbench events.
 	private textBlockIndex: number | null = null;
@@ -243,6 +246,7 @@ export class AcpClient implements AgentClient {
 		}
 		this.pending.clear();
 		this.pendingPermissions.clear();
+		this.settleUnsolicitedTurn("aborted");
 
 		await new Promise<void>((resolve) => {
 			const force = setTimeout(() => {
@@ -296,6 +300,9 @@ export class AcpClient implements AgentClient {
 			}
 			this.pending.clear();
 			this.pendingPermissions.clear();
+			this.clearUnsolicitedTimer();
+			this.unsolicitedTurn = false;
+			this.isStreaming = false;
 			for (const fn of this.exitListeners) fn({ code, stderr: this.stderrTail, expected });
 		});
 	}
@@ -417,7 +424,27 @@ export class AcpClient implements AgentClient {
 			return;
 		}
 
-		if (!this.isStreaming) return;
+		if (kind === "usage_update") {
+			if (this.unsolicitedTurn) this.bumpUnsolicitedTimer();
+			return;
+		}
+
+		if (
+			kind !== "agent_message_chunk" &&
+			kind !== "agent_thought_chunk" &&
+			kind !== "tool_call" &&
+			kind !== "tool_call_update"
+		) {
+			return;
+		}
+
+		// Background subagent wakeups can stream session/update notifications after session/prompt returned.
+		if (!this.isStreaming) {
+			this.beginUnsolicitedTurn();
+		}
+		if (this.unsolicitedTurn) {
+			this.bumpUnsolicitedTimer();
+		}
 
 		if (kind === "agent_message_chunk") {
 			const text = this.extractChunkText(update.content);
@@ -601,8 +628,61 @@ export class AcpClient implements AgentClient {
 		this.thinkingBlockIndex = null;
 	}
 
+	private clearUnsolicitedTimer(): void {
+		if (this.unsolicitedTimer) {
+			clearTimeout(this.unsolicitedTimer);
+			this.unsolicitedTimer = null;
+		}
+	}
+
+	private bumpUnsolicitedTimer(): void {
+		this.clearUnsolicitedTimer();
+		for (const tool of this.activeTools.values()) {
+			if (!tool.ended) return;
+		}
+		this.unsolicitedTimer = setTimeout(() => this.settleUnsolicitedTurn("stop"), UNSOLICITED_SETTLE_MS);
+	}
+
+	private beginUnsolicitedTurn(): void {
+		this.unsolicitedTurn = true;
+		this.isStreaming = true;
+		this.textBlockIndex = null;
+		this.thinkingBlockIndex = null;
+		this.turnBlocks = [];
+		this.activeTools.clear();
+		this.emit({ type: "agent_start" });
+		this.emit({ type: "turn_start" });
+		const assistantStart: AgentMessage = { role: "assistant", content: [], timestamp: Date.now() };
+		this.emit({ type: "message_start", message: assistantStart });
+	}
+
+	private settleUnsolicitedTurn(stopReason: "stop" | "aborted" | "error" = "stop", errorMessage?: string): void {
+		this.clearUnsolicitedTimer();
+		if (!this.unsolicitedTurn) return;
+		this.unsolicitedTurn = false;
+		this.finishAssistantTurn(stopReason, errorMessage);
+	}
+
+	private finishAssistantTurn(stopReason: "stop" | "aborted" | "error", errorMessage?: string): void {
+		this.isStreaming = false;
+		this.closeThinkingBlock();
+		this.closeTextBlock();
+		const finalAssistant: AgentMessage = {
+			role: "assistant",
+			content: this.turnBlocks,
+			stopReason,
+			errorMessage,
+			timestamp: Date.now(),
+		};
+		this.messages.push(finalAssistant);
+		this.emit({ type: "message_end", message: finalAssistant });
+		this.emit({ type: "agent_end" });
+		this.emit({ type: "agent_settled", aborted: stopReason === "aborted" });
+	}
+
 	async prompt(message: string, opts: { streamingBehavior?: "steer" | "followUp"; images?: ImageContent[] } = {}): Promise<void> {
 		if (!this.sessionId) throw new Error("No active ACP session.");
+		this.settleUnsolicitedTurn("stop");
 		const promptBlocks: Record<string, unknown>[] = [{ type: "text", text: message }];
 		const userContent: ContentBlock[] = [{ type: "text", text: message }];
 		for (const img of opts.images ?? []) {
@@ -638,20 +718,7 @@ export class AcpClient implements AgentClient {
 			errorMessage = (err as Error).message || String(err);
 			throw err;
 		} finally {
-			this.isStreaming = false;
-			this.closeThinkingBlock();
-			this.closeTextBlock();
-			const finalAssistant: AgentMessage = {
-				role: "assistant",
-				content: this.turnBlocks,
-				stopReason,
-				errorMessage,
-				timestamp: Date.now(),
-			};
-			this.messages.push(finalAssistant);
-			this.emit({ type: "message_end", message: finalAssistant });
-			this.emit({ type: "agent_end" });
-			this.emit({ type: "agent_settled", aborted: stopReason === "aborted" });
+			this.finishAssistantTurn(stopReason, errorMessage);
 		}
 	}
 

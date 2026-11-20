@@ -151,6 +151,7 @@ export class ChatSession {
 	private subagentsEl!: HTMLElement;
 	private activeSubagents = new Map<string, ActiveSubagent>();
 	private manageSubagentActions = new Map<string, string>();
+	private subagentsLaunchedThisTurn = false;
 	private mcpWarningEl!: HTMLElement;
 	private prerequisitesEl!: HTMLElement;
 	private mcpCheckedAt = 0;
@@ -514,10 +515,18 @@ export class ChatSession {
 		this.host.changed(this);
 	}
 
+	private clearSubagents(): void {
+		this.subagentsLaunchedThisTurn = false;
+		this.activeSubagents.clear();
+		this.manageSubagentActions.clear();
+		this.renderSubagents();
+		this.setActivity(null);
+	}
+
 	private setBusy(busy: boolean): void {
 		this.busy = busy;
 		if (!busy && !this.compacting) this.deliveryMode = "steer";
-		if (!busy) {
+		if (!busy && !this.subagentsLaunchedThisTurn) {
 			this.activeSubagents.clear();
 			this.manageSubagentActions.clear();
 			this.renderSubagents();
@@ -547,7 +556,8 @@ export class ChatSession {
 	}
 
 	private setActivity(text: string | null): void {
-		const effective = text ?? (this.busy && this.activeSubagents.size > 0 ? this.waitingForSubagentsText() : null);
+		const effective =
+			text ?? (this.activeSubagents.size > 0 && this.client.running ? this.waitingForSubagentsText() : null);
 		this.activityEl.setText(effective ?? "");
 		this.activityEl.parentElement?.toggleClass("is-active", Boolean(effective));
 		this.host.changed(this);
@@ -757,6 +767,7 @@ export class ChatSession {
 		this.piQueue = { steering: [], followUp: [] };
 		void this.unqueue();
 		this.setBusy(false);
+		this.clearSubagents();
 		this.setCompacting(false);
 		this.dialogs.drop();
 		this.settleToolGroup();
@@ -1410,12 +1421,14 @@ export class ChatSession {
 	private handleEvent(e: RpcEvent): void {
 		switch (e.type) {
 			case "agent_start":
+				this.subagentsLaunchedThisTurn = false;
 				this.setBusy(true);
 				this.setActivity("Working…");
 				void this.checkMcp();
 				break;
 			case "agent_settled":
 				if (!this.host.isShowing(this)) this.unread = true;
+				if (e.aborted) this.subagentsLaunchedThisTurn = false;
 				this.setBusy(false);
 				this.settleToolGroup();
 				this.live = null;
@@ -1452,6 +1465,7 @@ export class ChatSession {
 			case "tool_execution_start":
 				this.cardFor(e.toolCallId, e.toolName, e.args).setStatus("running");
 				if (e.toolName === "invoke_subagent") {
+					this.subagentsLaunchedThisTurn = true;
 					const role = typeof e.args?.Role === "string" ? e.args.Role.trim() : typeof e.args?.role === "string" ? e.args.role.trim() : "";
 					const typeName = typeof e.args?.TypeName === "string" ? e.args.TypeName.trim() : typeof e.args?.typeName === "string" ? e.args.typeName.trim() : "";
 					const model = typeof e.args?.Model === "string" ? e.args.Model.trim() : typeof e.args?.model === "string" ? e.args.model.trim() : "";
