@@ -409,6 +409,16 @@ export class AcpClient implements AgentClient {
 			return;
 		}
 
+		if (kind === "available_commands_update") {
+			const raw = Array.isArray(update.availableCommands) ? update.availableCommands : [];
+			this.commands = raw
+				.filter((c): c is { name: string; description?: string } => typeof c?.name === "string")
+				.map((c) => ({ name: c.name, description: c.description, source: "extension" }));
+			return;
+		}
+
+		if (!this.isStreaming) return;
+
 		if (kind === "agent_message_chunk") {
 			const text = this.extractChunkText(update.content);
 			if (!text) return;
@@ -453,7 +463,7 @@ export class AcpClient implements AgentClient {
 			this.closeThinkingBlock();
 			this.closeTextBlock();
 			const toolCallId = String(update.toolCallId ?? `tool-${Date.now()}`);
-			const toolName = String(update.title || update.kind || "tool");
+			const toolName = this.resolveToolName(update);
 			const args = (update.rawInput && typeof update.rawInput === "object" ? update.rawInput : {}) as Record<string, unknown>;
 			this.activeTools.set(toolCallId, { toolCallId, toolName, args, ended: false });
 			this.emit({ type: "tool_execution_start", toolCallId, toolName, args });
@@ -465,13 +475,13 @@ export class AcpClient implements AgentClient {
 			if (!toolCallId) return;
 			let tracked = this.activeTools.get(toolCallId);
 			if (!tracked) {
-				const toolName = String(update.title || update.kind || "tool");
+				const toolName = this.resolveToolName(update);
 				const args = (update.rawInput && typeof update.rawInput === "object" ? update.rawInput : {}) as Record<string, unknown>;
 				tracked = { toolCallId, toolName, args, ended: false };
 				this.activeTools.set(toolCallId, tracked);
 				this.emit({ type: "tool_execution_start", toolCallId, toolName, args });
-			} else if (typeof update.title === "string" && update.title) {
-				tracked.toolName = update.title;
+			} else {
+				tracked.toolName = this.resolveToolName(update, tracked.toolName);
 			}
 
 			const status = String(update.status ?? "");
@@ -495,13 +505,13 @@ export class AcpClient implements AgentClient {
 			}
 			return;
 		}
+	}
 
-		if (kind === "available_commands_update") {
-			const raw = Array.isArray(update.availableCommands) ? update.availableCommands : [];
-			this.commands = raw
-				.filter((c): c is { name: string; description?: string } => typeof c?.name === "string")
-				.map((c) => ({ name: c.name, description: c.description, source: "extension" }));
-		}
+	private resolveToolName(update: Record<string, unknown>, fallback?: string): string {
+		const rawName = typeof update.name === "string" ? update.name : "";
+		if (rawName === "invoke_subagent" || rawName === "manage_subagents") return rawName;
+		if (fallback === "invoke_subagent" || fallback === "manage_subagents") return fallback;
+		return String(update.title || rawName || update.kind || fallback || "tool");
 	}
 
 	private extractChunkText(content: unknown): string {

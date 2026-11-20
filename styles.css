@@ -724,7 +724,7 @@
 	min-height: 1.5em;
 	color: var(--text-accent);
 }
-.pi-activity:not(.is-active) .pi-icon {
+.pi-activity:not(.is-active) > .pi-icon {
 	display: none;
 }
 .pi-activity .pi-icon {
@@ -736,6 +736,44 @@
 .pi-activity-text,
 .pi-queue-text {
 	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.pi-subagents {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: var(--size-2-2);
+	max-width: 60%;
+	min-width: 0;
+}
+.pi-subagents:empty {
+	display: none;
+}
+.pi-subagent-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-1);
+	padding: 1px var(--size-2-3);
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.3;
+	max-width: 20ch;
+}
+.pi-subagent-chip .pi-icon {
+	display: inline-flex;
+	flex: none;
+}
+.pi-subagent-chip .pi-icon .svg-icon {
+	width: 11px;
+	height: 11px;
+}
+.pi-subagent-name {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;

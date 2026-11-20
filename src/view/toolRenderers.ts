@@ -157,6 +157,35 @@ const obsidianSearch: ToolRenderer = {
 	},
 };
 
+const invokeSubagent: ToolRenderer = {
+	icon: "bot",
+	label: "subagent",
+	summary(args) {
+		const role = str(args.Role ?? args.role).trim();
+		const type = str(args.TypeName ?? args.typeName).trim();
+		const model = str(args.Model ?? args.model).trim();
+		const label = role || type || "subagent";
+		const meta = [role && type ? type : "", model && model !== "inherit" ? model : ""].filter(Boolean).join(" · ");
+		return meta ? `${label} (${meta})` : label;
+	},
+	body(el, result, host) {
+		const text = contentText(result.content);
+		if (text.trim()) return markdownBody(el, text, host);
+		el.createDiv({ cls: "pi-tool-rich pi-qa-notes", text: "Launched in background — waiting for completion" });
+		return true;
+	},
+};
+
+const manageSubagents: ToolRenderer = {
+	icon: "bot",
+	label: "subagents",
+	summary(args) {
+		const action = str(args.Action ?? args.action);
+		const ids = Array.isArray(args.ConversationIds) ? args.ConversationIds.length : 0;
+		return [action, ids ? `${ids}` : ""].filter(Boolean).join(" · ");
+	},
+};
+
 export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
 	obsidian_search: obsidianSearch,
 	todo,
@@ -164,4 +193,6 @@ export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
 	advisor,
 	web_search: webSearch,
 	web_fetch: webFetch,
+	invoke_subagent: invokeSubagent,
+	manage_subagents: manageSubagents,
 };

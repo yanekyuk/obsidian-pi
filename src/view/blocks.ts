@@ -268,7 +268,13 @@ export function formatActivityText(toolName: string, args?: Record<string, unkno
 		case "find":
 			return text ? `Searching for ${short(text)}…` : "Searching vault…";
 		default: {
-			const label = TOOL_RENDERERS[toolName]?.label ?? toolName.replace(/_/g, " ");
+			const renderer = TOOL_RENDERERS[toolName];
+			if (renderer) {
+				const summary = renderer.summary(args);
+				const label = renderer.label ?? toolName.replace(/_/g, " ");
+				return summary ? `${label}: ${short(summary)}` : `Running ${label}…`;
+			}
+			const label = toolName.replace(/_/g, " ");
 			return text ? `${label}: ${short(text)}` : `Running ${label}…`;
 		}
 	}

@@ -88,6 +88,13 @@ export interface SessionHost {
 	closeDrawer(): void;
 }
 
+interface ActiveSubagent {
+	toolCallId: string;
+	label: string;
+	typeName: string;
+	model: string;
+}
+
 // One tab of the chat panel: a conversation with its own pi process, transcript and composer.
 // Tabs that aren't on screen keep running; the panel shows one at a time.
 export class ChatSession {
@@ -141,6 +148,9 @@ export class ChatSession {
 	private widgetsAboveEl!: HTMLElement;
 	private widgetsBelowEl!: HTMLElement;
 	private activityEl!: HTMLElement;
+	private subagentsEl!: HTMLElement;
+	private activeSubagents = new Map<string, ActiveSubagent>();
+	private manageSubagentActions = new Map<string, string>();
 	private mcpWarningEl!: HTMLElement;
 	private prerequisitesEl!: HTMLElement;
 	private mcpCheckedAt = 0;
@@ -361,6 +371,7 @@ export class ChatSession {
 		const activity = dock.createDiv({ cls: "pi-activity" });
 		setIcon(activity.createSpan({ cls: "pi-icon" }), "loader");
 		this.activityEl = activity.createSpan({ cls: "pi-activity-text" });
+		this.subagentsEl = activity.createDiv({ cls: "pi-subagents" });
 		this.todos = new TodoPanel(dock, this.renderHost, (hidden) => void this.plugin.setHiddenTodos(this.heldSessionFile, hidden));
 		this.queueEl = dock.createDiv({ cls: "pi-queue" });
 		this.widgetsAboveEl = dock.createDiv({ cls: "pi-widgets" });
@@ -506,6 +517,11 @@ export class ChatSession {
 	private setBusy(busy: boolean): void {
 		this.busy = busy;
 		if (!busy && !this.compacting) this.deliveryMode = "steer";
+		if (!busy) {
+			this.activeSubagents.clear();
+			this.manageSubagentActions.clear();
+			this.renderSubagents();
+		}
 		this.stopBtn.toggle(busy);
 		this.el.toggleClass("is-busy", busy);
 		this.renderComposerMode();
@@ -513,9 +529,27 @@ export class ChatSession {
 		else this.host.changed(this);
 	}
 
+	private waitingForSubagentsText(): string {
+		const n = this.activeSubagents.size;
+		return n === 1 ? "Waiting for subagent…" : `Waiting for ${n} subagents…`;
+	}
+
+	private renderSubagents(): void {
+		this.subagentsEl.empty();
+		for (const sub of this.activeSubagents.values()) {
+			const chip = this.subagentsEl.createSpan({ cls: "pi-subagent-chip" });
+			const meta = [sub.typeName, sub.model && sub.model !== "inherit" ? sub.model : ""].filter(Boolean).join(" · ");
+			chip.setAttribute("aria-label", meta ? `${sub.label} (${meta})` : sub.label);
+			setIcon(chip.createSpan({ cls: "pi-icon" }), "loader");
+			chip.createSpan({ cls: "pi-subagent-name", text: sub.label });
+		}
+		this.activityEl.parentElement?.toggleClass("has-subagents", this.activeSubagents.size > 0);
+	}
+
 	private setActivity(text: string | null): void {
-		this.activityEl.setText(text ?? "");
-		this.activityEl.parentElement?.toggleClass("is-active", Boolean(text));
+		const effective = text ?? (this.busy && this.activeSubagents.size > 0 ? this.waitingForSubagentsText() : null);
+		this.activityEl.setText(effective ?? "");
+		this.activityEl.parentElement?.toggleClass("is-active", Boolean(effective));
 		this.host.changed(this);
 	}
 
@@ -1417,6 +1451,21 @@ export class ChatSession {
 				break;
 			case "tool_execution_start":
 				this.cardFor(e.toolCallId, e.toolName, e.args).setStatus("running");
+				if (e.toolName === "invoke_subagent") {
+					const role = typeof e.args?.Role === "string" ? e.args.Role.trim() : typeof e.args?.role === "string" ? e.args.role.trim() : "";
+					const typeName = typeof e.args?.TypeName === "string" ? e.args.TypeName.trim() : typeof e.args?.typeName === "string" ? e.args.typeName.trim() : "";
+					const model = typeof e.args?.Model === "string" ? e.args.Model.trim() : typeof e.args?.model === "string" ? e.args.model.trim() : "";
+					this.activeSubagents.set(e.toolCallId, {
+						toolCallId: e.toolCallId,
+						label: role || typeName || "subagent",
+						typeName,
+						model,
+					});
+					this.renderSubagents();
+				} else if (e.toolName === "manage_subagents") {
+					const action = typeof e.args?.Action === "string" ? e.args.Action : typeof e.args?.action === "string" ? e.args.action : "";
+					if (action) this.manageSubagentActions.set(e.toolCallId, action);
+				}
 				this.setActivity(formatActivityText(e.toolName, e.args));
 				if (EDITING_TOOLS.has(e.toolName) && typeof e.args?.path === "string") {
 					this.snapshots.set(e.toolCallId, this.plugin.snapshotBeforeEdit(this.absolutePath(e.args.path)));
@@ -1429,10 +1478,25 @@ export class ChatSession {
 			case "tool_execution_end": {
 				const card = this.cardFor(e.toolCallId, e.toolName);
 				if (e.toolName === "todo" && !e.isError) this.todos.set(tasksFrom(e.result?.details) ?? null);
+				if (e.toolName === "invoke_subagent" && e.isError) {
+					this.activeSubagents.delete(e.toolCallId);
+					this.renderSubagents();
+				} else if (e.toolName === "manage_subagents") {
+					const action = this.manageSubagentActions.get(e.toolCallId);
+					this.manageSubagentActions.delete(e.toolCallId);
+					if (!e.isError && action === "kill_all") {
+						this.activeSubagents.clear();
+						this.renderSubagents();
+					}
+				}
 				card.setResult(e.result, e.isError);
 				card.setStatus(e.isError ? "error" : "done");
 				void this.offerRevert(e.toolCallId, e.toolName, e.isError);
-				this.setActivity(`Processing ${e.toolName} result…`);
+				this.setActivity(
+					e.toolName === "invoke_subagent" && this.activeSubagents.size > 0
+						? this.waitingForSubagentsText()
+						: `Processing ${e.toolName} result…`,
+				);
 				this.keepScrolled();
 				break;
 			}
@@ -1485,7 +1549,7 @@ export class ChatSession {
 				break;
 			case "text_delta": {
 				if (!d.delta) break;
-				this.setActivity("Writing response…");
+				if (this.busy) this.setActivity("Writing response…");
 				const existing = live.blocks.get(d.contentIndex);
 				let md = existing instanceof MarkdownBlock ? existing : undefined;
 				if (!md) {
@@ -1497,7 +1561,7 @@ export class ChatSession {
 				break;
 			}
 			case "thinking_start": {
-				this.setActivity("Thinking…");
+				if (this.busy) this.setActivity("Thinking…");
 				if (this.plugin.settings.showThinking) {
 					const group = this.ensureToolGroup(live.el);
 					const block = new ThinkingBlock(this.renderHost, group.cardContainer);
@@ -1510,7 +1574,7 @@ export class ChatSession {
 				const block = live.blocks.get(d.contentIndex);
 				if (block instanceof ThinkingBlock) {
 					block.append(d.delta);
-					if (block.summaryLine) this.setActivity(block.summaryLine);
+					if (this.busy && block.summaryLine) this.setActivity(block.summaryLine);
 				}
 				break;
 			}
