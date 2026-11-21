@@ -29,6 +29,7 @@ export interface PiAgentSettings {
 	// Ids of panes from before the rename whose tabs have been taken over (see main.ts).
 	adoptedLegacyPanels: string[];
 	hiddenTodos: Record<string, string[]>;
+	acpSessionTitles: Record<string, string>;
 	connectMcpOnStart: boolean;
 	browserControl: boolean;
 	// pi's obsidian_* tools: metadata cache, properties, commands.
@@ -69,6 +70,7 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	rememberedPackages: {},
 	adoptedLegacyPanels: [],
 	hiddenTodos: {},
+	acpSessionTitles: {},
 	connectMcpOnStart: true,
 	browserControl: false,
 	obsidianControl: true,

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import { StringDecoder } from "string_decoder";
+import type { SessionSummary } from "../sessions";
 import {
 	capabilitiesForBackend,
 	type AcpSpawnOptions,
@@ -71,6 +72,7 @@ export class AcpClient implements AgentClient {
 	private stopping = false;
 
 	private sessionId: string | null = null;
+	private sessionName: string | undefined = undefined;
 	private availableModels: Model[] = [];
 	private currentModel: Model | null = null;
 	private commands: SlashCommand[] = [];
@@ -120,7 +122,15 @@ export class AcpClient implements AgentClient {
 		if (!("skipPermissions" in spawnOpts)) {
 			throw new Error("AcpClient requires AcpSpawnOptions.");
 		}
-		const opts = spawnOpts;
+		await this.spawnAndInitialize(spawnOpts);
+		await this.openSession(spawnOpts.sessionId ?? null);
+
+		if (spawnOpts.model && this.currentModel?.id !== spawnOpts.model) {
+			await this.setModel("antigravity", spawnOpts.model).catch(() => {});
+		}
+	}
+
+	private async spawnAndInitialize(opts: AcpSpawnOptions): Promise<void> {
 		this.opts = opts;
 		this.stopping = false;
 		this.stderrTail = "";
@@ -162,11 +172,15 @@ export class AcpClient implements AgentClient {
 			},
 			clientInfo: { name: "agent-workbench", version: "0.1.40" },
 		});
+	}
 
-		await this.openSession(opts.sessionId ?? null);
-
-		if (opts.model && this.currentModel?.id !== opts.model) {
-			await this.setModel("antigravity", opts.model).catch(() => {});
+	static async listSessionsOnce(opts: AcpSpawnOptions): Promise<SessionSummary[]> {
+		const client = new AcpClient();
+		try {
+			await client.spawnAndInitialize(opts);
+			return await client.listSessions(opts.cwd);
+		} finally {
+			await client.stop();
 		}
 	}
 
@@ -174,6 +188,7 @@ export class AcpClient implements AgentClient {
 		const opts = this.opts;
 		if (!opts) return;
 		this.messages = [];
+		this.sessionName = undefined;
 		const mcpServers = opts.mcpServers ?? [];
 
 		let res: {
@@ -747,9 +762,39 @@ export class AcpClient implements AgentClient {
 			isCompacting: false,
 			sessionFile: this.sessionId ? `acp:${this.sessionId}` : undefined,
 			sessionId: this.sessionId ?? undefined,
+			sessionName: this.sessionName,
 			messageCount: this.messages.length,
 			pendingMessageCount: 0,
 		};
+	}
+
+	async listSessions(cwd?: string): Promise<SessionSummary[]> {
+		const targetCwd = cwd ?? this.opts?.cwd;
+		const sessions: SessionSummary[] = [];
+		let cursor: string | undefined;
+		for (let page = 0; page < 10; page++) {
+			const params: Record<string, unknown> = {};
+			if (targetCwd) params.cwd = targetCwd;
+			if (cursor) params.cursor = cursor;
+			const res = (await this.request("session/list", params)) as {
+				sessions?: Array<{ sessionId?: string; cwd?: string; title?: string; updatedAt?: string }>;
+				nextCursor?: string;
+			};
+			for (const s of res.sessions ?? []) {
+				if (!s.sessionId) continue;
+				const title = s.title?.trim() || "Agy session";
+				const mtime = s.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+				sessions.push({
+					path: `acp:${s.sessionId}`,
+					title,
+					named: Boolean(s.title?.trim()),
+					mtime,
+				});
+			}
+			if (!res.nextCursor) break;
+			cursor = res.nextCursor;
+		}
+		return sessions;
 	}
 
 	async getMessages(): Promise<AgentMessage[]> {
@@ -800,7 +845,9 @@ export class AcpClient implements AgentClient {
 		return { cancelled: false };
 	}
 
-	async setSessionName(_name: string): Promise<void> {}
+	async setSessionName(name: string): Promise<void> {
+		this.sessionName = name.trim() || undefined;
+	}
 
 	async cloneSession(): Promise<{ cancelled: boolean }> {
 		return { cancelled: true };

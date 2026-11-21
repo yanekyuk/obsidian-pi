@@ -12,7 +12,7 @@ import { AcpClient } from "../rpc/AcpClient";
 import type { AcpSpawnOptions, AgentBackend } from "../rpc/AgentClient";
 import type { PiSpawnOptions } from "../rpc/PiRpcClient";
 import type { ImageContent, ThinkingLevel } from "../rpc/types";
-import { listSessions } from "../sessions";
+import { listSessions, type SessionSummary } from "../sessions";
 import { snapshotAfter, snapshotBefore, unchangedSince, type FileSnapshot } from "../view/revert";
 import { acceptWebSocket, ServerWebSocket, tokensMatch } from "./ws";
 
@@ -37,6 +37,7 @@ export interface RemoteServerHost {
 	// The scoped-model patterns pi works from, the terminal profile's unless extraArgs names its own.
 	enabledModelPatterns(extraArgs?: string): Promise<string[]>;
 	sessionDirectories(): string[];
+	listAcpSessions?(): Promise<SessionSummary[]>;
 	lastSessionFile(): string;
 	heldSessionFiles(): string[];
 	isSessionHeld(sessionFile: string): boolean;
@@ -251,7 +252,11 @@ export class PiRemoteServer {
 				return { vaultName: this.host.vaultName(), vaultPath: this.host.vaultPath() };
 			case "list_sessions": {
 				const dirs = [...new Set([...this.host.sessionDirectories(), ...this.heldSessionFiles().map((p) => p.slice(0, p.lastIndexOf("/"))).filter(Boolean)])];
-				const sessions = await listSessions(dirs);
+				const [piSessions, acpSessions] = await Promise.all([
+					listSessions(dirs),
+					this.host.listAcpSessions ? this.host.listAcpSessions().catch(() => []) : Promise.resolve([]),
+				]);
+				const sessions = [...piSessions, ...acpSessions].sort((a, b) => b.mtime - a.mtime);
 				return {
 					sessions,
 					heldSessionFiles: this.host.heldSessionFiles(),
@@ -269,6 +274,7 @@ export class PiRemoteServer {
 			case "trash_session": {
 				const path = typeof payload.path === "string" ? payload.path : "";
 				if (!path) throw new Error("Missing session path.");
+				if (path.startsWith("acp:")) throw new Error("Agy sessions cannot be moved to trash.");
 				await this.reclaimDetachedSession(path);
 				if (this.host.isSessionHeld(path)) throw new Error("That session is open on another device or tab.");
 				await this.host.trashSession(path);

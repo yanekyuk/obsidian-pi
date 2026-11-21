@@ -21,6 +21,7 @@ import { buildSystemPrompt } from "./prompt";
 import { PiRemoteClient } from "./remote/client";
 import { PiRemoteServer, type RemoteSessionOverrides } from "./remote/server";
 import { DEFAULT_SERVER_PORT, discoverServerUrls, generateServerToken } from "./remote/ws";
+import { AcpClient } from "./rpc/AcpClient";
 import type { AcpSpawnOptions, AgentBackend, AgentSpawnOptions } from "./rpc/AgentClient";
 import type { PiSpawnOptions } from "./rpc/PiRpcClient";
 import { listSessions, type SessionSummary } from "./sessions";
@@ -197,6 +198,7 @@ export default class PiAgentPlugin extends Plugin {
 				vaultPath: () => this.vaultPath,
 				enabledModelPatterns: (extraArgs) => this.readEnabledModelPatterns(extraArgs),
 				sessionDirectories: () => this.sessionDirectories(),
+				listAcpSessions: () => this.listAcpSessions(),
 				lastSessionFile: () => this.settings.lastSessionFile,
 				heldSessionFiles: () => this.heldSessionFiles(),
 				isSessionHeld: (file) => this.isSessionHeld(file),
@@ -264,7 +266,48 @@ export default class PiAgentPlugin extends Plugin {
 			const res = await this.remoteClient.listSessions();
 			return { sessions: res.sessions, openElsewhere: new Set(res.heldSessionFiles) };
 		}
-		return { sessions: await listSessions(this.sessionDirectories()), openElsewhere: new Set() };
+		const [piSessions, acpSessions] = await Promise.all([
+			listSessions(this.sessionDirectories()),
+			this.listAcpSessions(),
+		]);
+		const sessions = [...piSessions, ...acpSessions].sort((a, b) => b.mtime - a.mtime);
+		return { sessions, openElsewhere: new Set() };
+	}
+
+	acpSessionTitle(sessionFileOrId: string): string | undefined {
+		const id = sessionFileOrId.startsWith("acp:") ? sessionFileOrId.slice(4) : sessionFileOrId;
+		return id ? this.settings.acpSessionTitles[id] : undefined;
+	}
+
+	async setAcpSessionTitle(sessionFileOrId: string, title: string): Promise<void> {
+		const id = sessionFileOrId.startsWith("acp:") ? sessionFileOrId.slice(4) : sessionFileOrId;
+		if (!id) return;
+		const trimmed = title.trim();
+		if (trimmed) this.settings.acpSessionTitles[id] = trimmed;
+		else delete this.settings.acpSessionTitles[id];
+		await this.saveSettings();
+	}
+
+	async listAcpSessions(): Promise<SessionSummary[]> {
+		try {
+			const running = this.chatViews().flatMap((v) => v.allTabs()).find((t) => t.acpClient)?.acpClient;
+			const raw = running
+				? await running.listSessions(this.vaultPath)
+				: await AcpClient.listSessionsOnce({
+						binary: this.settings.agyPath,
+						args: this.settings.agyArgs.split(/\s+/).filter(Boolean),
+						cwd: this.vaultPath,
+						env: await resolveEnv(),
+						skipPermissions: this.settings.agySkipPermissions,
+					});
+			return raw.map((s) => {
+				const custom = this.acpSessionTitle(s.path);
+				return custom ? { ...s, title: custom, named: true } : s;
+			});
+		} catch (err) {
+			console.warn("[pi-workbench] couldn't list Agy sessions", err);
+			return [];
+		}
 	}
 
 	canRestoreTab(sessionFile: string, except?: ChatSession): boolean {
@@ -285,6 +328,7 @@ export default class PiAgentPlugin extends Plugin {
 	}
 
 	async trashSessionFile(path: string): Promise<void> {
+		if (path.startsWith("acp:")) throw new Error("Agy sessions cannot be moved to trash.");
 		if (this.isRemote) await this.remoteClient.trashSession(path);
 		else await shell.trashItem(path);
 	}

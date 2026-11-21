@@ -240,6 +240,10 @@ export class ChatSession {
 		return this.client.running;
 	}
 
+	get acpClient(): AcpClient | null {
+		return this.client instanceof AcpClient && this.client.running ? this.client : null;
+	}
+
 	get isBusy(): boolean {
 		return this.busy || this.compacting;
 	}
@@ -898,6 +902,13 @@ export class ChatSession {
 	private async syncSession(opts?: { preserveDialogs?: boolean }): Promise<void> {
 		const wasBusy = this.busy;
 		this.state = await this.client.getState();
+		if (this.backend === "acp" && this.state.sessionFile && !this.state.sessionName) {
+			const savedName = this.plugin.acpSessionTitle(this.state.sessionFile);
+			if (savedName) {
+				await this.client.setSessionName(savedName);
+				this.state = { ...this.state, sessionName: savedName };
+			}
+		}
 		this.sessionFile = this.state.sessionFile ?? null;
 		if (this.pendingLink && this.state.sessionFile) {
 			const note = this.pendingLink;
@@ -1296,11 +1307,16 @@ export class ChatSession {
 
 	async renameCurrent(): Promise<void> {
 		if (!this.client.running) return;
-		const name = await promptText(this.app, "Rename session", this.state?.sessionName ?? "");
+		const currentName = this.state?.sessionName ?? (this.backend === "acp" ? this.savedTitle || "" : "");
+		const name = await promptText(this.app, "Rename session", currentName);
 		// pi's RPC rejects empty names, so there is no way to clear one from here.
 		if (!name?.trim()) return;
 		try {
-			await this.client.setSessionName(name.trim());
+			const trimmed = name.trim();
+			await this.client.setSessionName(trimmed);
+			if (this.backend === "acp" && this.heldSessionFile) {
+				await this.plugin.setAcpSessionTitle(this.heldSessionFile, trimmed);
+			}
 			this.state = await this.client.getState();
 			this.renderControls();
 			this.host.sessionsChanged();

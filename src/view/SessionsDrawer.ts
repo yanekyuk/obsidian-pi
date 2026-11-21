@@ -150,6 +150,7 @@ export class SessionsDrawer {
 			const main = row.createDiv({ cls: "pi-session-main" });
 			main.createDiv({ cls: "pi-session-title", text: session.title });
 			const meta = [moment(session.mtime).fromNow()];
+			if (session.path.startsWith("acp:")) meta.push("Agy");
 			if (isCurrent) meta.push("current");
 			else if (elsewhere.has(session.path)) meta.push("open in another tab");
 			main.createDiv({ cls: "pi-session-meta", text: meta.join(" · ") });
@@ -173,9 +174,11 @@ export class SessionsDrawer {
 		menu.addItem((i) => i.setTitle("Open").setIcon("message-square").onClick(() => this.host.openSession(session)));
 		menu.addSeparator();
 		menu.addItem((i) => i.setTitle("Rename…").setIcon("pencil").onClick(() => this.host.renameSession(session)));
-		menu.addItem((i) => i.setTitle("Duplicate").setIcon("copy").onClick(() => this.host.duplicateSession(session)));
-		menu.addSeparator();
-		menu.addItem((i) => i.setTitle("Move to trash").setIcon("trash-2").setWarning(true).onClick(() => this.host.deleteSession(session)));
+		if (!session.path.startsWith("acp:")) {
+			menu.addItem((i) => i.setTitle("Duplicate").setIcon("copy").onClick(() => this.host.duplicateSession(session)));
+			menu.addSeparator();
+			menu.addItem((i) => i.setTitle("Move to trash").setIcon("trash-2").setWarning(true).onClick(() => this.host.deleteSession(session)));
+		}
 		menu.showAtMouseEvent(evt);
 	}
 }
