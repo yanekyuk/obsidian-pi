@@ -759,11 +759,122 @@
 	gap: var(--size-2-1);
 	padding: 1px var(--size-2-3);
 	border-radius: var(--radius-s);
+	border: none;
 	background: var(--background-modifier-hover);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	line-height: 1.3;
 	max-width: 20ch;
+}
+.pi-subagent-chip.is-clickable {
+	cursor: pointer;
+}
+.pi-subagent-chip.is-clickable:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-active-hover);
+}
+.pi-subagent-modal .modal-content {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-3);
+}
+.pi-subagent-modal-meta {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--size-2-2);
+}
+.pi-subagent-badge {
+	display: inline-flex;
+	align-items: center;
+	padding: 2px var(--size-2-3);
+	border-radius: var(--radius-s);
+	font-size: var(--font-ui-smaller);
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+	border: none;
+}
+.pi-subagent-badge.is-muted {
+	color: var(--text-muted);
+}
+.pi-subagent-badge.is-running {
+	color: var(--color-accent);
+}
+.pi-subagent-badge.is-id {
+	font-family: var(--font-monospace);
+	cursor: pointer;
+}
+.pi-subagent-refresh {
+	margin-left: auto;
+}
+.pi-subagent-modal-prompt summary,
+.pi-subagent-thinking summary,
+.pi-subagent-tool-result summary {
+	cursor: pointer;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+.pi-subagent-prompt-body,
+.pi-subagent-thinking-body {
+	margin-top: var(--size-2-2);
+	padding: var(--size-2-3);
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	font-size: var(--font-ui-small);
+	white-space: pre-wrap;
+	max-height: 180px;
+	overflow-y: auto;
+}
+.pi-subagent-modal-feed {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	max-height: 55vh;
+	overflow-y: auto;
+	padding-right: var(--size-2-1);
+}
+.pi-subagent-step {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-2);
+	padding: var(--size-2-3);
+	border-radius: var(--radius-m);
+	background: var(--background-secondary);
+}
+.pi-subagent-tool-calls {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+}
+.pi-subagent-tool-call {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.pi-subagent-tool-name {
+	font-family: var(--font-monospace);
+	color: var(--text-normal);
+}
+.pi-subagent-tool-args {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.pi-subagent-tool-result pre {
+	margin-top: var(--size-2-1);
+	padding: var(--size-2-2);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	font-size: var(--font-ui-smaller);
+	max-height: 200px;
+	overflow: auto;
+}
+.pi-subagent-empty {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	padding: var(--size-4-2) 0;
 }
 .pi-subagent-chip .pi-icon {
 	display: inline-flex;

@@ -19,6 +19,7 @@ import { InlineDialogs, type DialogForm } from "./InlineDialogs";
 import { scopeModels } from "../models";
 import { renderInline } from "./markdown";
 import { ModelPicker, pickOne, promptText } from "./modals";
+import { SubagentModal, type SubagentInfo } from "./SubagentModal";
 import { SideQuestions } from "./SideQuestion";
 import { TodoPanel, tasksFrom } from "./TodoPanel";
 import { appendToNote, createNote, createNoteFrom, insertIntoNote, markdownOf } from "./writeBack";
@@ -88,12 +89,7 @@ export interface SessionHost {
 	closeDrawer(): void;
 }
 
-interface ActiveSubagent {
-	toolCallId: string;
-	label: string;
-	typeName: string;
-	model: string;
-}
+type ActiveSubagent = SubagentInfo;
 
 // One tab of the chat panel: a conversation with its own pi process, transcript and composer.
 // Tabs that aren't on screen keep running; the panel shows one at a time.
@@ -550,11 +546,17 @@ export class ChatSession {
 	private renderSubagents(): void {
 		this.subagentsEl.empty();
 		for (const sub of this.activeSubagents.values()) {
-			const chip = this.subagentsEl.createSpan({ cls: "pi-subagent-chip" });
+			const chip = this.subagentsEl.createEl("button", {
+				cls: "pi-subagent-chip is-clickable",
+				attr: { type: "button" },
+			});
 			const meta = [sub.typeName, sub.model && sub.model !== "inherit" ? sub.model : ""].filter(Boolean).join(" · ");
-			chip.setAttribute("aria-label", meta ? `${sub.label} (${meta})` : sub.label);
+			chip.setAttribute("aria-label", meta ? `${sub.label} (${meta}) — click to inspect` : `${sub.label} — click to inspect`);
 			setIcon(chip.createSpan({ cls: "pi-icon" }), "loader");
 			chip.createSpan({ cls: "pi-subagent-name", text: sub.label });
+			chip.addEventListener("click", () => {
+				new SubagentModal(this.host.app, sub, () => this.activeSubagents.has(sub.toolCallId)).open();
+			});
 		}
 		this.activityEl.parentElement?.toggleClass("has-subagents", this.activeSubagents.size > 0);
 	}
@@ -1485,11 +1487,14 @@ export class ChatSession {
 					const role = typeof e.args?.Role === "string" ? e.args.Role.trim() : typeof e.args?.role === "string" ? e.args.role.trim() : "";
 					const typeName = typeof e.args?.TypeName === "string" ? e.args.TypeName.trim() : typeof e.args?.typeName === "string" ? e.args.typeName.trim() : "";
 					const model = typeof e.args?.Model === "string" ? e.args.Model.trim() : typeof e.args?.model === "string" ? e.args.model.trim() : "";
+					const prompt = typeof e.args?.Prompt === "string" ? e.args.Prompt.trim() : typeof e.args?.prompt === "string" ? e.args.prompt.trim() : "";
 					this.activeSubagents.set(e.toolCallId, {
 						toolCallId: e.toolCallId,
 						label: role || typeName || "subagent",
 						typeName,
 						model,
+						prompt,
+						startedAt: Date.now(),
 					});
 					this.renderSubagents();
 				} else if (e.toolName === "manage_subagents") {
@@ -1508,9 +1513,20 @@ export class ChatSession {
 			case "tool_execution_end": {
 				const card = this.cardFor(e.toolCallId, e.toolName);
 				if (e.toolName === "todo" && !e.isError) this.todos.set(tasksFrom(e.result?.details) ?? null);
-				if (e.toolName === "invoke_subagent" && e.isError) {
-					this.activeSubagents.delete(e.toolCallId);
-					this.renderSubagents();
+				if (e.toolName === "invoke_subagent") {
+					if (e.isError) {
+						this.activeSubagents.delete(e.toolCallId);
+						this.renderSubagents();
+					} else {
+						const sub = this.activeSubagents.get(e.toolCallId);
+						if (sub) {
+							const text = contentText(e.result?.content ?? []);
+							if (text.trim()) sub.resultText = text;
+							const detailsId = typeof e.result?.details?.conversationId === "string" ? e.result.details.conversationId : undefined;
+							const matchId = text.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i)?.[0];
+							if (detailsId || matchId) sub.conversationId = detailsId ?? matchId;
+						}
+					}
 				} else if (e.toolName === "manage_subagents") {
 					const action = this.manageSubagentActions.get(e.toolCallId);
 					this.manageSubagentActions.delete(e.toolCallId);

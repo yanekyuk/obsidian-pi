@@ -1,7 +1,7 @@
 {
 	"id": "pi-workbench",
 	"name": "Agent Workbench",
-	"version": "0.1.44",
+	"version": "0.1.45",
 	"minAppVersion": "1.5.0",
 	"description": "Chat with Pi and Agy coding agents in your vault: tabs, sessions, tasks and questions in a panel that follows your theme.",
 	"author": "Yanek Yuk",
