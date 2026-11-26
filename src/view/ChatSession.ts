@@ -391,6 +391,7 @@ export class ChatSession {
 			},
 			() => this.el.contains(this.el.ownerDocument.activeElement),
 			() => this.host.changed(this),
+			this.backendLabel,
 		);
 
 		const composer = dock.createDiv({ cls: "pi-composer" });
@@ -1512,7 +1513,7 @@ export class ChatSession {
 				break;
 			case "tool_execution_end": {
 				const card = this.cardFor(e.toolCallId, e.toolName);
-				if (e.toolName === "todo" && !e.isError) this.todos.set(tasksFrom(e.result?.details) ?? null);
+				if ((e.toolName === "todo" || e.toolName === "update_steps") && !e.isError) this.todos.set(tasksFrom(e.result?.details) ?? null);
 				if (e.toolName === "invoke_subagent") {
 					if (e.isError) {
 						this.activeSubagents.delete(e.toolCallId);
@@ -1654,10 +1655,17 @@ export class ChatSession {
 			case "confirm":
 			case "input":
 			case "editor":
+			case "form":
 				this.askUser(req);
 				break;
 			case "notify":
 				this.showNotification(stripAnsi(req.message ?? ""), req.notifyType ?? "info");
+				break;
+			case "setTitle":
+				if (req.title && this.state) {
+					this.state = { ...this.state, sessionName: req.title };
+					this.host.changed(this);
+				}
 				break;
 			case "setStatus":
 				// Footer chatter meant for pi's terminal ("MCP: 1 server enabled", auth state).
@@ -1681,8 +1689,8 @@ export class ChatSession {
 		if (this.dialogs.has(req.id)) return;
 		this.dialogs.push(req);
 		// The question sits in this tab; say so if the user is looking somewhere else.
-		if (!this.host.isShowing(this)) this.callOver(`pi has a question for you in "${this.title}".`);
-		else if (!this.el.contains(this.el.ownerDocument.activeElement)) this.callOver("pi has a question for you.");
+		if (!this.host.isShowing(this)) this.callOver(`${this.backendLabel} has a question for you in "${this.title}".`);
+		else if (!this.el.contains(this.el.ownerDocument.activeElement)) this.callOver(`${this.backendLabel} has a question for you.`);
 	}
 
 	// ---------------------------------------------------------------- transcript
@@ -1745,8 +1753,8 @@ export class ChatSession {
 				const card = this.cardFor(r.toolCallId, r.toolName);
 				card.setResult(r, r.isError);
 				card.setStatus(r.isError ? "error" : "done");
-				// Every todo result is a full snapshot, so the last one is the current list.
-				if (r.toolName === "todo" && !r.isError) tasks = tasksFrom(r.details) ?? tasks;
+				// Every todo/update_steps result is a full snapshot, so the last one is the current list.
+				if ((r.toolName === "todo" || r.toolName === "update_steps") && !r.isError) tasks = tasksFrom(r.details) ?? tasks;
 			} else if (m.role === "branchSummary") {
 				this.settleToolGroup();
 				this.live = null;

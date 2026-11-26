@@ -186,10 +186,28 @@ const manageSubagents: ToolRenderer = {
 	},
 };
 
+const updateSteps: ToolRenderer = {
+	icon: "list-checks",
+	label: "steps",
+	summary(args, result) {
+		const tasks = tasksFrom(result?.details);
+		if (tasks?.length) {
+			const done = tasks.filter((t) => t.status === "completed").length;
+			const active = tasks.find((t) => t.status === "in_progress");
+			return active ? `${done}/${tasks.length} · ${active.subject}` : `${done}/${tasks.length} done`;
+		}
+		const steps = Array.isArray(args.steps) ? (args.steps as { title?: unknown; status?: unknown }[]) : [];
+		const active = steps.find((s) => s.status === "in_progress");
+		return active && typeof active.title === "string" ? active.title : `${steps.length} step${steps.length === 1 ? "" : "s"}`;
+	},
+};
+
 export const TOOL_RENDERERS: Record<string, ToolRenderer> = {
 	obsidian_search: obsidianSearch,
 	todo,
+	update_steps: updateSteps,
 	ask_user_question: askUserQuestion,
+	ask_question: askUserQuestion,
 	advisor,
 	web_search: webSearch,
 	web_fetch: webFetch,

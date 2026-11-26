@@ -12,6 +12,7 @@ import type {
 	SessionStats,
 	SlashCommand,
 	ThinkingLevel,
+	UiResponse,
 } from "./types";
 
 export interface PiRemoteSpawnOptions {
@@ -845,7 +846,7 @@ export class PiRpcClient implements AgentClient {
 		return this.request("compact", customInstructions ? { customInstructions } : {});
 	}
 
-	respondToUi(id: string, response: { value: string } | { confirmed: boolean } | { cancelled: true }): void {
+	respondToUi(id: string, response: UiResponse): void {
 		this.write({ type: "extension_ui_response", id, ...response });
 	}
 }

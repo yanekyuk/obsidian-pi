@@ -29,7 +29,7 @@ export { sharedPiEnvironment } from ${JSON.stringify(join(root, "src/piEnvironme
 export { environmentForShell } from ${JSON.stringify(join(root, "pi-extension/panel-shell.ts"))};
 export { DEFAULT_SETTINGS } from ${JSON.stringify(join(root, "src/settings.ts"))};
 export { listSessions } from ${JSON.stringify(join(root, "src/sessions.ts"))};
-export { splitHeader, splitPreviews, parseOptions, parseMultiSelect } from ${JSON.stringify(join(root, "src/view/InlineDialogs.ts"))};
+export { splitHeader, splitPreviews, parseOptions, parseMultiSelect, parseElicitationFields } from ${JSON.stringify(join(root, "src/view/InlineDialogs.ts"))};
 export { Requirements, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS } from ${JSON.stringify(join(root, "src/requirements.ts"))};
 export { vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand } from ${JSON.stringify(join(root, "src/mcp.ts"))};
 export { tasksFrom } from ${JSON.stringify(join(root, "src/view/TodoPanel.ts"))};
@@ -68,7 +68,7 @@ const obsidianStub = {
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, backendLabel, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput, PiRemoteServer, PiRemoteClient, DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } =
+const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parseElicitationFields, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, backendLabel, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput, PiRemoteServer, PiRemoteClient, DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -796,6 +796,31 @@ const check = (ok, label, detail = "") => {
 		"remote URLs: bare Tailscale IPs, ws:// and http:// normalize cleanly",
 	);
 
+	// ACP elicitation schema parser: pairs qN + qN_other into single/multi fields and preserves generic fields
+	{
+		const fields = parseElicitationFields({
+			type: "object",
+			properties: {
+				q1: { type: "string", title: "Color?", oneOf: [{ const: "1", title: "Red" }, { const: "2", title: "Blue" }] },
+				q1_other: { type: "string", title: "Other" },
+				q2: { type: "array", title: "Fruits?", items: { anyOf: [{ const: "1", title: "Apple" }, { const: "2", title: "Banana" }] } },
+				q2_other: { type: "string", title: "Other" },
+				confirmFlag: { type: "boolean", title: "Proceed?" },
+			},
+			required: ["q1"],
+		});
+		check(
+			fields.length === 3 &&
+				fields[0].kind === "single" &&
+				fields[0].otherKey === "q1_other" &&
+				fields[0].required === true &&
+				fields[1].kind === "multi" &&
+				fields[1].otherKey === "q2_other" &&
+				fields[2].kind === "boolean",
+			"parseElicitationFields: pairs single/multi _other inputs and handles generic types",
+		);
+	}
+
 	// Remote Agy (ACP) over WebSocket using a mock `agy acp` script
 	const mockAgyScript = join(work, "mock-agy.mjs");
 	const mockAgyBin = join(work, "mock-agy");
@@ -804,43 +829,61 @@ const check = (ok, label, detail = "") => {
 		`import * as readline from "readline";
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 let activeSession = "mock-acp-1";
+let sawFormCapability = false;
+let currentThought = "high";
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+const configOptions = () => [
+	{ id: "model", name: "Model", category: "model", type: "select", currentValue: "gemini-4-neon", options: [{ value: "gemini-4-neon", name: "Gemini 4 Neon" }] },
+	{ id: "thought_level", name: "Thinking Level", category: "thought_level", type: "select", currentValue: currentThought, options: [{ value: "low", name: "Low" }, { value: "medium", name: "Medium" }, { value: "high", name: "High" }] },
+];
+const models = () => ({
+	availableModels: [
+		{ modelId: "gemini-4-neon-low", name: "Gemini 4 Neon (Low)" },
+		{ modelId: "gemini-4-neon-medium", name: "Gemini 4 Neon (Medium)" },
+		{ modelId: "gemini-4-neon-high", name: "Gemini 4 Neon (High)" },
+	],
+	currentModelId: "gemini-4-neon-" + currentThought,
+});
 rl.on("line", (line) => {
 	if (!line.trim()) return;
 	const msg = JSON.parse(line);
 	if (msg.method === "initialize") {
+		sawFormCapability = Boolean(msg.params?.clientCapabilities?.elicitation?.form);
 		send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
 	} else if (msg.method === "session/new") {
-		send({
-			jsonrpc: "2.0",
-			id: msg.id,
-			result: {
-				sessionId: activeSession,
-				models: {
-					availableModels: [{ modelId: "gemini-3.8-pro", name: "Gemini 3.8 Pro" }],
-					currentModelId: "gemini-3.8-pro",
-				},
-			},
-		});
+		send({ jsonrpc: "2.0", id: msg.id, result: { sessionId: activeSession, models: models(), configOptions: configOptions() } });
 	} else if (msg.method === "session/load") {
 		activeSession = msg.params?.sessionId || activeSession;
-		send({
-			jsonrpc: "2.0",
-			id: msg.id,
-			result: {
-				sessionId: activeSession,
-				models: {
-					availableModels: [{ modelId: "gemini-3.8-pro", name: "Gemini 3.8 Pro" }],
-					currentModelId: "gemini-3.8-pro",
-				},
-			},
-		});
+		send({ jsonrpc: "2.0", id: msg.id, result: { sessionId: activeSession, models: models(), configOptions: configOptions() } });
+	} else if (msg.method === "session/set_config_option") {
+		if (msg.params?.configId === "thought_level") currentThought = msg.params.value;
+		send({ jsonrpc: "2.0", id: msg.id, result: { configOptions: configOptions() } });
 	} else if (msg.method === "session/prompt") {
 		const promptId = msg.id;
+		send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "session_info_update", title: "Agy Auto Title" } } });
+		send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "usage_update", used: 50000, size: 1000000 } } });
 		send({
 			jsonrpc: "2.0",
 			method: "session/update",
 			params: { update: { sessionUpdate: "agent_thought_chunk", content: [{ type: "text", text: "Thinking..." }] } },
+		});
+		send({
+			jsonrpc: "2.0",
+			method: "session/update",
+			params: {
+				update: {
+					sessionUpdate: "tool_call",
+					toolCallId: "tc-steps",
+					name: "update_steps",
+					title: "Run update_steps",
+					rawInput: { steps: [{ title: "Inspect ACP", status: "done" }, { title: "Ask user", status: "in_progress" }] },
+				},
+			},
+		});
+		send({
+			jsonrpc: "2.0",
+			method: "session/update",
+			params: { update: { sessionUpdate: "tool_call_update", toolCallId: "tc-steps", name: "update_steps", status: "completed" } },
 		});
 		send({
 			jsonrpc: "2.0",
@@ -872,9 +915,62 @@ rl.on("line", (line) => {
 			send({
 				jsonrpc: "2.0",
 				method: "session/update",
-				params: { update: { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Remote Agy reply" }] } },
+				params: {
+					update: {
+						sessionUpdate: "tool_call",
+						toolCallId: "tc-ask",
+						name: "ask_question",
+						title: "Run ask_question",
+						rawInput: {
+							questions: [
+								{ question: "Color?", options: ["Red", "Blue"], is_multi_select: false },
+								{ question: "Fruits?", options: ["Apple", "Banana", "Cherry"], is_multi_select: true },
+							],
+						},
+					},
+				},
 			});
-			send({ jsonrpc: "2.0", id: promptId, result: { stopReason: "end_turn" } });
+			send({
+				jsonrpc: "2.0",
+				id: "elicit-1",
+				method: "elicitation/create",
+				params: {
+					sessionId: activeSession,
+					toolCallId: "tc-ask",
+					mode: "form",
+					message: "The agent has 2 questions.",
+					requestedSchema: {
+						type: "object",
+						properties: {
+							q1: { type: "string", title: "Color?", oneOf: [{ const: "1", title: "Red" }, { const: "2", title: "Blue" }] },
+							q1_other: { type: "string", title: "Other" },
+							q2: { type: "array", title: "Fruits?", items: { anyOf: [{ const: "1", title: "Apple" }, { const: "2", title: "Banana" }, { const: "3", title: "Cherry" }] } },
+							q2_other: { type: "string", title: "Other" },
+						},
+					},
+				},
+			});
+			const onElicit = (elicitLine) => {
+				if (!elicitLine.trim()) return;
+				const eResp = JSON.parse(elicitLine);
+				if (eResp.id !== "elicit-1") return;
+				rl.off("line", onElicit);
+				send({
+					jsonrpc: "2.0",
+					method: "session/update",
+					params: { update: { sessionUpdate: "tool_call_update", toolCallId: "tc-ask", name: "ask_question", status: "completed" } },
+				});
+				const reply = sawFormCapability && eResp.result?.action === "accept" && eResp.result?.content?.q1 === "2" && eResp.result?.content?.q2_other === "Mango"
+					? "Remote Agy reply"
+					: "Unexpected elicitation response: " + JSON.stringify(eResp.result);
+				send({
+					jsonrpc: "2.0",
+					method: "session/update",
+					params: { update: { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: reply }] } },
+				});
+				send({ jsonrpc: "2.0", id: promptId, result: { stopReason: "end_turn", usage: { inputTokens: 1000, outputTokens: 200, totalTokens: 1200 } } });
+			};
+			rl.on("line", onElicit);
 		};
 		rl.on("line", onPerm);
 	}
@@ -918,14 +1014,32 @@ rl.on("line", (line) => {
 	acpRpc.onEvent((e) => {
 		acpEvents.push(e);
 		if (e.type === "extension_ui_request") {
-			acpRpc.respondToUi(e.id, { value: "Allow once" });
+			if (e.method === "form") {
+				acpRpc.respondToUi(e.id, { content: { q1: "2", q2: ["1", "3"], q2_other: "Mango" } });
+			} else if (e.method === "select") {
+				acpRpc.respondToUi(e.id, { value: "Allow once" });
+			}
 		}
 	});
 	await acpRpc.start(acpRemote.buildSpawnOptions(null, {}, "acp"));
 	const acpState = await acpRpc.getState();
+	const acpLevels = await acpRpc.getAvailableThinkingLevels();
 	check(
-		acpRpc.running && acpRpc.backend === "acp" && !acpRpc.capabilities.queueing && acpState.sessionFile === "acp:mock-acp-1" && acpState.model?.id === "gemini-3.8-pro",
-		"remote Agy: PiRpcClient('acp') connects over WebSocket and initializes ACP session",
+		acpRpc.running &&
+			acpRpc.backend === "acp" &&
+			!acpRpc.capabilities.queueing &&
+			acpRpc.capabilities.thinkingLevels &&
+			acpState.sessionFile === "acp:mock-acp-1" &&
+			acpState.model?.id === "gemini-4-neon-high" &&
+			acpState.thinkingLevel === "high" &&
+			acpLevels.join(",") === "low,medium,high",
+		"remote Agy: PiRpcClient('acp') connects over WebSocket, initializes ACP session, and reads thought_level configOptions",
+	);
+	await acpRpc.setThinkingLevel("medium");
+	const acpStateAfterThought = await acpRpc.getState();
+	check(
+		acpStateAfterThought.thinkingLevel === "medium" && acpStateAfterThought.model?.id === "gemini-4-neon-medium",
+		"remote Agy: setThinkingLevel updates thought_level via session/set_config_option",
 	);
 	check(acpServer.isSessionHeld("acp:mock-acp-1") && (await acpRemote.sessionExists("acp:mock-acp-1")), "remote Agy: tracks held acp session and session_exists returns true");
 
@@ -939,11 +1053,20 @@ rl.on("line", (line) => {
 	await Promise.race([acpSettled, new Promise((_, rej) => setTimeout(() => rej(new Error("timed out waiting for remote Agy turn")), 5000))]);
 	const acpMsgs = await acpRpc.getMessages();
 	const acpReplyText = acpMsgs.find((m) => m.role === "assistant")?.content?.find((b) => b.type === "text")?.text ?? "";
+	const acpAskEnd = acpEvents.find((e) => e.type === "tool_execution_end" && e.toolName === "ask_question");
+	const acpStepsEnd = acpEvents.find((e) => e.type === "tool_execution_end" && e.toolName === "update_steps");
+	const acpStats = await acpRpc.getSessionStats();
+	const acpStateAfterPrompt = await acpRpc.getState();
 	check(
-		acpEvents.some((e) => e.type === "extension_ui_request") &&
-			acpEvents.some((e) => e.type === "tool_execution_end" && !e.isError) &&
+		acpEvents.some((e) => e.type === "extension_ui_request" && e.method === "select") &&
+			acpEvents.some((e) => e.type === "extension_ui_request" && e.method === "form" && e.schema?.properties?.q1?.oneOf?.length === 2) &&
+			acpAskEnd?.result?.details?.answers?.length === 2 &&
+			acpAskEnd?.result?.details?.answers?.[0]?.answer === "Blue" &&
+			acpStepsEnd?.result?.details?.tasks?.length === 2 &&
+			acpStats.contextUsage?.percent === 5 &&
+			acpStateAfterPrompt.sessionName === "Agy Auto Title" &&
 			acpReplyText === "Remote Agy reply",
-		"remote Agy: streams tool calls, forwards permission prompts, and records reply",
+		"remote Agy: forwards native elicitation/create forms, records ask_question answers, maps update_steps, tracks usage & auto-title",
 	);
 
 	let acpUnexpectedExit = false;

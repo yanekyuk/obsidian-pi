@@ -112,13 +112,53 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_start"; contentIndex: number; id: string; toolName: string }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCallContent };
 
+export interface ElicitationChoice {
+	const: string;
+	title?: string;
+	description?: string;
+}
+
+export interface ElicitationProperty {
+	type?: "string" | "number" | "integer" | "boolean" | "array";
+	title?: string;
+	description?: string;
+	default?: unknown;
+	enum?: string[];
+	enumNames?: string[];
+	oneOf?: ElicitationChoice[];
+	items?: {
+		type?: string;
+		enum?: string[];
+		anyOf?: ElicitationChoice[];
+	};
+	format?: string;
+	minLength?: number;
+	maxLength?: number;
+	minimum?: number;
+	maximum?: number;
+}
+
+export interface ElicitationSchema {
+	type: "object";
+	properties: Record<string, ElicitationProperty>;
+	required?: string[];
+}
+
+export type UiResponse =
+	| { value: string }
+	| { confirmed: boolean }
+	| { content: Record<string, unknown> }
+	| { declined: true }
+	| { cancelled: true };
+
 export interface ExtensionUiRequest {
 	type: "extension_ui_request";
 	id: string;
-	method: "select" | "confirm" | "input" | "editor" | "notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text";
+	method: "select" | "confirm" | "input" | "editor" | "form" | "notify" | "setStatus" | "setWidget" | "setTitle" | "set_editor_text";
 	title?: string;
 	message?: string;
 	options?: string[];
+	schema?: ElicitationSchema;
 	placeholder?: string;
 	prefill?: string;
 	notifyType?: "info" | "warning" | "error";

@@ -15,6 +15,9 @@ import {
 import type {
 	AgentMessage,
 	ContentBlock,
+	ElicitationChoice,
+	ElicitationProperty,
+	ElicitationSchema,
 	ImageContent,
 	Model,
 	RpcEvent,
@@ -24,6 +27,7 @@ import type {
 	SlashCommand,
 	ThinkingLevel,
 	ToolResult,
+	UiResponse,
 } from "./types";
 
 interface PendingJsonRpc {
@@ -45,11 +49,159 @@ interface AcpPermissionOption {
 	kind?: string;
 }
 
+interface AcpConfigOptionValue {
+	value: string;
+	name?: string;
+	description?: string;
+}
+
+interface AcpConfigOption {
+	id: string;
+	name?: string;
+	category?: string;
+	type?: string;
+	currentValue?: string;
+	options?: AcpConfigOptionValue[];
+}
+
+interface AcpSessionResponse {
+	sessionId?: string;
+	models?: { availableModels?: AcpModelInfo[]; currentModelId?: string };
+	configOptions?: AcpConfigOption[];
+}
+
+interface PendingElicitation {
+	toolCallId?: string;
+	schema: ElicitationSchema;
+	resolve: (result: unknown) => void;
+}
+
 interface TrackedToolCall {
 	toolCallId: string;
 	toolName: string;
 	args: Record<string, unknown>;
 	ended: boolean;
+}
+
+const VALID_THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const CANONICAL_TOOL_NAMES = new Set(["invoke_subagent", "manage_subagents", "ask_question", "update_steps"]);
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+	return typeof value === "string" && VALID_THINKING_LEVELS.has(value as ThinkingLevel);
+}
+
+function normalizeElicitationSchema(raw: unknown): ElicitationSchema {
+	if (!raw || typeof raw !== "object") return { type: "object", properties: {} };
+	const obj = raw as Record<string, unknown>;
+	const rawProps = obj.properties && typeof obj.properties === "object" ? (obj.properties as Record<string, unknown>) : {};
+	const properties: Record<string, ElicitationProperty> = {};
+	for (const [key, val] of Object.entries(rawProps)) {
+		if (val && typeof val === "object") properties[key] = val as ElicitationProperty;
+	}
+	const required = Array.isArray(obj.required) ? obj.required.filter((r): r is string => typeof r === "string") : undefined;
+	return { type: "object", properties, ...(required?.length ? { required } : {}) };
+}
+
+function choicesOf(prop: ElicitationProperty): ElicitationChoice[] {
+	if (Array.isArray(prop.oneOf)) return prop.oneOf;
+	if (Array.isArray(prop.items?.anyOf)) return prop.items.anyOf;
+	if (Array.isArray(prop.enum)) {
+		return prop.enum.map((v, i) => ({ const: v, title: prop.enumNames?.[i] ?? v }));
+	}
+	if (Array.isArray(prop.items?.enum)) {
+		return prop.items.enum.map((v) => ({ const: v, title: v }));
+	}
+	return [];
+}
+
+function buildElicitationDetails(
+	schema: ElicitationSchema,
+	content: Record<string, unknown> | null,
+	cancelled: boolean,
+): Record<string, unknown> {
+	const answers: Array<{
+		question: string;
+		kind: "option" | "custom" | "multi";
+		answer: string | null;
+		selected?: string[];
+	}> = [];
+	const entries = Object.entries(schema.properties);
+	const consumed = new Set<string>();
+
+	for (const [key, prop] of entries) {
+		if (consumed.has(key)) continue;
+		const otherKey = `${key}_other`;
+		const hasOther = otherKey in schema.properties && schema.properties[otherKey]?.type === "string";
+		const choices = choicesOf(prop);
+		const isMulti = prop.type === "array" && choices.length > 0;
+		const isSingle = prop.type === "string" && choices.length > 0;
+		const question = prop.title || key;
+
+		if (isMulti || isSingle) {
+			if (hasOther) consumed.add(otherKey);
+			const rawVal = content?.[key];
+			const otherVal = hasOther && typeof content?.[otherKey] === "string" ? content[otherKey].trim() : "";
+			const labelFor = (code: string) => choices.find((c) => c.const === code)?.title ?? code;
+
+			if (isMulti) {
+				const selected = Array.isArray(rawVal) ? rawVal.map((v) => labelFor(String(v))) : [];
+				if (selected.length || otherVal || !cancelled) {
+					answers.push({
+						question,
+						kind: "multi",
+						selected,
+						answer: otherVal || null,
+					});
+				}
+			} else {
+				const selectedLabel = typeof rawVal === "string" && rawVal ? labelFor(rawVal) : null;
+				if (otherVal && !selectedLabel) {
+					answers.push({ question, kind: "custom", answer: otherVal });
+				} else if (selectedLabel && otherVal) {
+					answers.push({ question, kind: "option", answer: `${selectedLabel}; ${otherVal}` });
+				} else if (selectedLabel || !cancelled) {
+					answers.push({ question, kind: "option", answer: selectedLabel });
+				}
+			}
+			continue;
+		}
+
+		const rawVal = content?.[key];
+		if (rawVal === undefined && cancelled) continue;
+		const answer =
+			typeof rawVal === "boolean"
+				? rawVal
+					? "Yes"
+					: "No"
+				: rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== ""
+					? String(rawVal)
+					: null;
+		answers.push({ question, kind: "custom", answer });
+	}
+
+	return { answers, ...(cancelled ? { cancelled: true } : {}) };
+}
+
+function stepsToTodoTasks(steps: unknown): Array<{ id: number; subject: string; status: "pending" | "in_progress" | "completed" | "deleted" }> | null {
+	if (!Array.isArray(steps)) return null;
+	const tasks: Array<{ id: number; subject: string; status: "pending" | "in_progress" | "completed" | "deleted" }> = [];
+	steps.forEach((step, idx) => {
+		if (!step || typeof step !== "object") return;
+		const s = step as { title?: unknown; status?: unknown };
+		if (typeof s.title !== "string" || !s.title.trim()) return;
+		const rawStatus = typeof s.status === "string" ? s.status : "pending";
+		let status: "pending" | "in_progress" | "completed" | "deleted" = "pending";
+		let subject = s.title.trim();
+		if (rawStatus === "done" || rawStatus === "completed") status = "completed";
+		else if (rawStatus === "in_progress") status = "in_progress";
+		else if (rawStatus === "skipped" || rawStatus === "deleted") status = "deleted";
+		else if (rawStatus === "failed") {
+			status = "pending";
+			subject = `${subject} (failed)`;
+		}
+		tasks.push({ id: idx + 1, subject, status });
+	});
+	return tasks.length ? tasks : null;
 }
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -66,6 +218,8 @@ export class AcpClient implements AgentClient {
 	private nextId = 1;
 	private pending = new Map<number, PendingJsonRpc>();
 	private pendingPermissions = new Map<string, { options: AcpPermissionOption[]; resolve: (result: unknown) => void }>();
+	private pendingElicitations = new Map<string, PendingElicitation>();
+	private resolvedElicitationDetails = new Map<string, Record<string, unknown>>();
 	private eventListeners = new Set<EventListener>();
 	private exitListeners = new Set<ExitListener>();
 	private stderrTail = "";
@@ -73,8 +227,15 @@ export class AcpClient implements AgentClient {
 
 	private sessionId: string | null = null;
 	private sessionName: string | undefined = undefined;
+	private customSessionName = false;
 	private availableModels: Model[] = [];
 	private currentModel: Model | null = null;
+	private currentBaseModelId: string | null = null;
+	private availableThinkingLevels: ThinkingLevel[] = [];
+	private currentThinkingLevel: ThinkingLevel = "off";
+	private contextUsed: number | null = null;
+	private contextSize: number | null = null;
+	private usageTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 	private commands: SlashCommand[] = [];
 	private messages: AgentMessage[] = [];
 	private isStreaming = false;
@@ -169,8 +330,9 @@ export class AcpClient implements AgentClient {
 			clientCapabilities: {
 				fs: { readTextFile: false, writeTextFile: false },
 				terminal: false,
+				elicitation: { form: {} },
 			},
-			clientInfo: { name: "agent-workbench", version: "0.1.40" },
+			clientInfo: { name: "agent-workbench", version: "0.1.46" },
 		});
 	}
 
@@ -189,12 +351,17 @@ export class AcpClient implements AgentClient {
 		if (!opts) return;
 		this.messages = [];
 		this.sessionName = undefined;
+		this.customSessionName = false;
+		this.currentBaseModelId = null;
+		this.availableThinkingLevels = [];
+		this.currentThinkingLevel = "off";
+		this.contextUsed = null;
+		this.contextSize = null;
+		this.usageTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+		this.resolvedElicitationDetails.clear();
 		const mcpServers = opts.mcpServers ?? [];
 
-		let res: {
-			sessionId?: string;
-			models?: { availableModels?: AcpModelInfo[]; currentModelId?: string };
-		};
+		let res: AcpSessionResponse;
 
 		if (targetSessionId) {
 			try {
@@ -203,7 +370,7 @@ export class AcpClient implements AgentClient {
 					sessionId: targetSessionId,
 					cwd: opts.cwd,
 					mcpServers,
-				})) as typeof res;
+				})) as AcpSessionResponse;
 			} catch {
 				this.replayingHistory = false;
 				this.messages = [];
@@ -226,12 +393,47 @@ export class AcpClient implements AgentClient {
 		this.currentModel =
 			this.availableModels.find((m) => m.id === currentId) ??
 			(currentId ? { id: currentId, name: currentId, provider: "antigravity" } : null);
+		if (Array.isArray(res.configOptions)) {
+			this.applyConfigOptions(res.configOptions);
+		}
+	}
+
+	private applyConfigOptions(options: AcpConfigOption[]): void {
+		const thought = options.find((o) => o.id === "thought_level" || o.category === "thought_level");
+		if (thought) {
+			const levels = (thought.options ?? []).map((o) => o.value).filter(isThinkingLevel);
+			this.availableThinkingLevels = levels;
+			if (isThinkingLevel(thought.currentValue)) {
+				this.currentThinkingLevel = thought.currentValue;
+			} else if (levels.length && !levels.includes(this.currentThinkingLevel)) {
+				this.currentThinkingLevel = levels[0];
+			}
+		}
+		const modelOpt = options.find((o) => o.id === "model" || o.category === "model");
+		if (modelOpt?.currentValue) {
+			this.currentBaseModelId = modelOpt.currentValue;
+		}
+		const hasReasoning = this.availableThinkingLevels.length > 0;
+		for (const m of this.availableModels) {
+			m.reasoning = hasReasoning;
+		}
+		if (this.currentBaseModelId) {
+			const combinedId =
+				this.currentThinkingLevel !== "off" ? `${this.currentBaseModelId}-${this.currentThinkingLevel}` : this.currentBaseModelId;
+			const matched =
+				this.availableModels.find((m) => m.id === combinedId) ??
+				this.availableModels.find((m) => m.id === this.currentBaseModelId);
+			if (matched) this.currentModel = matched;
+		}
+		if (this.currentModel) {
+			this.currentModel.reasoning = hasReasoning;
+		}
 	}
 
 	private async createNewSession(
 		opts: AcpSpawnOptions,
 		mcpServers: AcpSpawnOptions["mcpServers"],
-	): Promise<{ sessionId?: string; models?: { availableModels?: AcpModelInfo[]; currentModelId?: string } }> {
+	): Promise<AcpSessionResponse> {
 		const params: Record<string, unknown> = {
 			cwd: opts.cwd,
 			mcpServers: mcpServers ?? [],
@@ -243,10 +445,7 @@ export class AcpClient implements AgentClient {
 				},
 			};
 		}
-		return (await this.request("session/new", params)) as {
-			sessionId?: string;
-			models?: { availableModels?: AcpModelInfo[]; currentModelId?: string };
-		};
+		return (await this.request("session/new", params)) as AcpSessionResponse;
 	}
 
 	async stop(): Promise<void> {
@@ -261,6 +460,7 @@ export class AcpClient implements AgentClient {
 		}
 		this.pending.clear();
 		this.pendingPermissions.clear();
+		this.pendingElicitations.clear();
 		this.settleUnsolicitedTurn("aborted");
 
 		await new Promise<void>((resolve) => {
@@ -315,6 +515,7 @@ export class AcpClient implements AgentClient {
 			}
 			this.pending.clear();
 			this.pendingPermissions.clear();
+			this.pendingElicitations.clear();
 			this.clearUnsolicitedTimer();
 			this.unsolicitedTurn = false;
 			this.isStreaming = false;
@@ -367,6 +568,30 @@ export class AcpClient implements AgentClient {
 	}
 
 	private async handleIncomingRequest(id: number | string, method: string, params: Record<string, unknown>): Promise<void> {
+		if (method === "elicitation/create") {
+			const mode = typeof params.mode === "string" ? params.mode : "form";
+			if (mode !== "form") {
+				this.sendRaw({ jsonrpc: "2.0", id, result: { action: "decline" } });
+				return;
+			}
+			const schema = normalizeElicitationSchema(params.requestedSchema);
+			const message = typeof params.message === "string" ? params.message.trim() : "";
+			const toolCallId = typeof params.toolCallId === "string" ? params.toolCallId : undefined;
+			const uiId = `acp-elicit-${id}`;
+			const result = await new Promise<unknown>((resolve) => {
+				this.pendingElicitations.set(uiId, { toolCallId, schema, resolve });
+				this.emit({
+					type: "extension_ui_request",
+					id: uiId,
+					method: "form",
+					title: message || "Agy is asking",
+					schema,
+				});
+			});
+			this.sendRaw({ jsonrpc: "2.0", id, result });
+			return;
+		}
+
 		if (method === "session/request_permission") {
 			const options = Array.isArray(params.options) ? (params.options as AcpPermissionOption[]) : [];
 			const toolCall = (params.toolCall ?? {}) as { title?: string };
@@ -439,7 +664,32 @@ export class AcpClient implements AgentClient {
 			return;
 		}
 
+		if (kind === "config_option_update") {
+			if (Array.isArray(update.configOptions)) {
+				this.applyConfigOptions(update.configOptions as AcpConfigOption[]);
+			}
+			return;
+		}
+
+		if (kind === "session_info_update") {
+			const title = typeof update.title === "string" ? update.title.trim() : "";
+			if (title && !this.customSessionName) {
+				this.sessionName = title;
+				this.emit({
+					type: "extension_ui_request",
+					id: `acp-title-${Date.now()}`,
+					method: "setTitle",
+					title,
+				});
+			}
+			return;
+		}
+
 		if (kind === "usage_update") {
+			const used = typeof update.used === "number" ? update.used : null;
+			const size = typeof update.size === "number" ? update.size : null;
+			if (used !== null && used >= 0) this.contextUsed = used;
+			if (size !== null && size > 0) this.contextSize = size;
 			if (this.unsolicitedTurn) this.bumpUnsolicitedTimer();
 			return;
 		}
@@ -506,7 +756,7 @@ export class AcpClient implements AgentClient {
 			this.closeTextBlock();
 			const toolCallId = String(update.toolCallId ?? `tool-${Date.now()}`);
 			const toolName = this.resolveToolName(update);
-			const args = (update.rawInput && typeof update.rawInput === "object" ? update.rawInput : {}) as Record<string, unknown>;
+			const args = this.extractToolArgs(update);
 			this.activeTools.set(toolCallId, { toolCallId, toolName, args, ended: false });
 			this.emit({ type: "tool_execution_start", toolCallId, toolName, args });
 			return;
@@ -515,21 +765,23 @@ export class AcpClient implements AgentClient {
 		if (kind === "tool_call_update") {
 			const toolCallId = String(update.toolCallId ?? "");
 			if (!toolCallId) return;
+			const incomingArgs = this.extractToolArgs(update);
 			let tracked = this.activeTools.get(toolCallId);
 			if (!tracked) {
 				const toolName = this.resolveToolName(update);
-				const args = (update.rawInput && typeof update.rawInput === "object" ? update.rawInput : {}) as Record<string, unknown>;
-				tracked = { toolCallId, toolName, args, ended: false };
+				tracked = { toolCallId, toolName, args: incomingArgs, ended: false };
 				this.activeTools.set(toolCallId, tracked);
-				this.emit({ type: "tool_execution_start", toolCallId, toolName, args });
+				this.emit({ type: "tool_execution_start", toolCallId, toolName, args: incomingArgs });
 			} else {
 				tracked.toolName = this.resolveToolName(update, tracked.toolName);
+				if (Object.keys(incomingArgs).length > 0) tracked.args = incomingArgs;
 			}
 
 			const status = String(update.status ?? "");
-			const result = this.extractToolResult(update);
+			const result = this.extractToolResult(update, tracked);
 			if ((status === "completed" || status === "failed") && !tracked.ended) {
 				tracked.ended = true;
+				this.resolvedElicitationDetails.delete(toolCallId);
 				this.emit({
 					type: "tool_execution_end",
 					toolCallId,
@@ -549,10 +801,16 @@ export class AcpClient implements AgentClient {
 		}
 	}
 
+	private extractToolArgs(update: Record<string, unknown>): Record<string, unknown> {
+		if (update.rawInput && typeof update.rawInput === "object") return update.rawInput as Record<string, unknown>;
+		if (update.args && typeof update.args === "object") return update.args as Record<string, unknown>;
+		return {};
+	}
+
 	private resolveToolName(update: Record<string, unknown>, fallback?: string): string {
 		const rawName = typeof update.name === "string" ? update.name : "";
-		if (rawName === "invoke_subagent" || rawName === "manage_subagents") return rawName;
-		if (fallback === "invoke_subagent" || fallback === "manage_subagents") return fallback;
+		if (CANONICAL_TOOL_NAMES.has(rawName)) return rawName;
+		if (fallback && CANONICAL_TOOL_NAMES.has(fallback)) return fallback;
 		return String(update.title || rawName || update.kind || fallback || "tool");
 	}
 
@@ -567,9 +825,9 @@ export class AcpClient implements AgentClient {
 		return "";
 	}
 
-	private extractToolResult(update: Record<string, unknown>): ToolResult {
+	private extractToolResult(update: Record<string, unknown>, tracked?: TrackedToolCall): ToolResult {
 		const content: ContentBlock[] = [];
-		let diff: string | undefined;
+		let details: Record<string, unknown> | undefined;
 		const rawContent = Array.isArray(update.content) ? update.content : [];
 		for (const item of rawContent) {
 			if (!item || typeof item !== "object") continue;
@@ -585,14 +843,27 @@ export class AcpClient implements AgentClient {
 				const path = typeof block.path === "string" ? block.path : "";
 				const oldText = typeof block.oldText === "string" ? block.oldText : "";
 				const newText = typeof block.newText === "string" ? block.newText : "";
-				diff = `--- ${path}\n+++ ${path}\n${oldText ? `-${oldText.split("\n").join("\n-")}\n` : ""}+${newText.split("\n").join("\n+")}`;
+				details = {
+					...details,
+					diff: `--- ${path}\n+++ ${path}\n${oldText ? `-${oldText.split("\n").join("\n-")}\n` : ""}+${newText.split("\n").join("\n+")}`,
+				};
 			}
 		}
 		if (!content.length && update.rawOutput !== undefined) {
 			const text = typeof update.rawOutput === "string" ? update.rawOutput : JSON.stringify(update.rawOutput, null, 2);
 			if (text) content.push({ type: "text", text });
 		}
-		return { content, details: diff ? { diff } : undefined };
+		if (tracked) {
+			const elicitDetails = this.resolvedElicitationDetails.get(tracked.toolCallId);
+			if (elicitDetails) {
+				details = { ...details, ...elicitDetails };
+			}
+			if (tracked.toolName === "update_steps") {
+				const tasks = stepsToTodoTasks(tracked.args.steps);
+				if (tasks) details = { ...details, tasks };
+			}
+		}
+		return { content, details };
 	}
 
 	private emit(event: RpcEvent): void {
@@ -726,7 +997,23 @@ export class AcpClient implements AgentClient {
 			const res = (await this.request("session/prompt", {
 				sessionId: this.sessionId,
 				prompt: promptBlocks,
-			})) as { stopReason?: string };
+			})) as {
+				stopReason?: string;
+				usage?: {
+					inputTokens?: number;
+					outputTokens?: number;
+					cachedReadTokens?: number;
+					cachedWriteTokens?: number;
+					totalTokens?: number;
+				};
+			};
+			if (res?.usage) {
+				if (typeof res.usage.inputTokens === "number") this.usageTokens.input = res.usage.inputTokens;
+				if (typeof res.usage.outputTokens === "number") this.usageTokens.output = res.usage.outputTokens;
+				if (typeof res.usage.cachedReadTokens === "number") this.usageTokens.cacheRead = res.usage.cachedReadTokens;
+				if (typeof res.usage.cachedWriteTokens === "number") this.usageTokens.cacheWrite = res.usage.cachedWriteTokens;
+				if (typeof res.usage.totalTokens === "number") this.usageTokens.total = res.usage.totalTokens;
+			}
 			if (res?.stopReason === "cancelled") stopReason = "aborted";
 		} catch (err) {
 			stopReason = "error";
@@ -757,7 +1044,7 @@ export class AcpClient implements AgentClient {
 	async getState(): Promise<SessionState> {
 		return {
 			model: this.currentModel,
-			thinkingLevel: "off",
+			thinkingLevel: this.currentThinkingLevel,
 			isStreaming: this.isStreaming,
 			isCompacting: false,
 			sessionFile: this.sessionId ? `acp:${this.sessionId}` : undefined,
@@ -816,21 +1103,47 @@ export class AcpClient implements AgentClient {
 			id: modelId,
 			name: modelId,
 			provider: "antigravity",
+			reasoning: this.availableThinkingLevels.length > 0,
 		};
 		this.currentModel = found;
+		const suffix = modelId.match(/-(off|minimal|low|medium|high|xhigh|max)$/)?.[1];
+		if (suffix && isThinkingLevel(suffix)) {
+			this.currentThinkingLevel = suffix;
+			this.currentBaseModelId = modelId.slice(0, -(suffix.length + 1));
+		}
 		return found;
 	}
 
 	async getAvailableThinkingLevels(): Promise<ThinkingLevel[]> {
-		return [];
+		return [...this.availableThinkingLevels];
 	}
 
-	async setThinkingLevel(_level: ThinkingLevel): Promise<void> {}
+	async setThinkingLevel(level: ThinkingLevel): Promise<void> {
+		if (!this.sessionId || !this.availableThinkingLevels.length) return;
+		const res = (await this.request("session/set_config_option", {
+			sessionId: this.sessionId,
+			configId: "thought_level",
+			value: level,
+		})) as { configOptions?: AcpConfigOption[] } | null;
+		this.currentThinkingLevel = level;
+		if (Array.isArray(res?.configOptions)) {
+			this.applyConfigOptions(res.configOptions);
+		}
+	}
 
 	async getSessionStats(): Promise<SessionStats> {
+		const contextUsage =
+			this.contextSize && this.contextSize > 0
+				? {
+						tokens: this.contextUsed,
+						contextWindow: this.contextSize,
+						percent: this.contextUsed !== null ? (this.contextUsed / this.contextSize) * 100 : null,
+					}
+				: undefined;
 		return {
 			cost: 0,
-			tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			tokens: { ...this.usageTokens },
+			contextUsage,
 		};
 	}
 
@@ -846,7 +1159,9 @@ export class AcpClient implements AgentClient {
 	}
 
 	async setSessionName(name: string): Promise<void> {
-		this.sessionName = name.trim() || undefined;
+		const trimmed = name.trim();
+		this.sessionName = trimmed || undefined;
+		this.customSessionName = Boolean(trimmed);
 	}
 
 	async cloneSession(): Promise<{ cancelled: boolean }> {
@@ -869,7 +1184,44 @@ export class AcpClient implements AgentClient {
 		return null;
 	}
 
-	respondToUi(id: string, response: { value: string } | { confirmed: boolean } | { cancelled: true }): void {
+	respondToUi(id: string, response: UiResponse): void {
+		const pendingElicit = this.pendingElicitations.get(id);
+		if (pendingElicit) {
+			this.pendingElicitations.delete(id);
+			if ("cancelled" in response && response.cancelled) {
+				if (pendingElicit.toolCallId) {
+					this.resolvedElicitationDetails.set(
+						pendingElicit.toolCallId,
+						buildElicitationDetails(pendingElicit.schema, null, true),
+					);
+				}
+				pendingElicit.resolve({ action: "cancel" });
+				return;
+			}
+			if ("declined" in response && response.declined) {
+				if (pendingElicit.toolCallId) {
+					this.resolvedElicitationDetails.set(
+						pendingElicit.toolCallId,
+						buildElicitationDetails(pendingElicit.schema, null, true),
+					);
+				}
+				pendingElicit.resolve({ action: "decline" });
+				return;
+			}
+			if ("content" in response && response.content && typeof response.content === "object") {
+				if (pendingElicit.toolCallId) {
+					this.resolvedElicitationDetails.set(
+						pendingElicit.toolCallId,
+						buildElicitationDetails(pendingElicit.schema, response.content, false),
+					);
+				}
+				pendingElicit.resolve({ action: "accept", content: response.content });
+				return;
+			}
+			pendingElicit.resolve({ action: "cancel" });
+			return;
+		}
+
 		const pending = this.pendingPermissions.get(id);
 		if (!pending) return;
 		this.pendingPermissions.delete(id);

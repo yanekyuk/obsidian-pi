@@ -9,6 +9,7 @@ import type {
 	SessionStats,
 	SlashCommand,
 	ThinkingLevel,
+	UiResponse,
 } from "./types";
 
 export type AgentBackend = "pi" | "acp";
@@ -41,8 +42,8 @@ const ACP_CAPABILITIES: AgentCapabilities = {
 	branching: false,
 	compaction: false,
 	sessionFiles: false,
-	thinkingLevels: false,
-	extensionUi: false,
+	thinkingLevels: true,
+	extensionUi: true,
 };
 
 export function capabilitiesForBackend(backend: AgentBackend): AgentCapabilities {
@@ -114,5 +115,5 @@ export interface AgentClient {
 	startBranch(): Promise<void>;
 	navigateTree(targetId: string, opts?: { summarize?: boolean }): Promise<void>;
 	compact(customInstructions?: string): Promise<unknown>;
-	respondToUi(id: string, response: { value: string } | { confirmed: boolean } | { cancelled: true }): void;
+	respondToUi(id: string, response: UiResponse): void;
 }

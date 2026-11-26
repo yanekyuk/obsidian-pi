@@ -1,6 +1,6 @@
 {
   "name": "obsidian-pi",
-  "version": "0.1.45",
+  "version": "0.1.46",
   "description": "Obsidian harness for Pi and Agy coding agents",
   "main": "main.js",
   "type": "module",

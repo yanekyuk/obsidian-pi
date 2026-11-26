@@ -1214,9 +1214,142 @@ textarea.pi-input:active {
 	border-color: var(--interactive-accent);
 	background: var(--background-modifier-hover);
 }
-.pi-dialog-option input[type="checkbox"] {
+.pi-dialog-option.is-selected {
+	border-color: var(--interactive-accent);
+	background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+}
+.pi-dialog-option input[type="checkbox"],
+.pi-dialog-option input[type="radio"] {
 	flex: none;
 	margin: 2px 0 0;
+	accent-color: var(--interactive-accent);
+	cursor: pointer;
+}
+.pi-dialog-option input[type="radio"] {
+	appearance: none;
+	-webkit-appearance: none;
+	width: 15px;
+	height: 15px;
+	border: 1.5px solid var(--text-muted);
+	border-radius: 50%;
+	background: var(--background-primary);
+	display: grid;
+	place-content: center;
+	transition: border-color 120ms ease, background-color 120ms ease;
+}
+.pi-dialog-option input[type="radio"]::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	transform: scale(0);
+	transition: transform 120ms ease;
+	background: var(--interactive-accent);
+}
+.pi-dialog-option input[type="radio"]:checked {
+	border-color: var(--interactive-accent);
+}
+.pi-dialog-option input[type="radio"]:checked::before {
+	transform: scale(1);
+}
+.pi-dialog-form {
+	max-height: 55vh;
+	padding-bottom: 0;
+}
+.pi-dialog-form-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-3);
+}
+.pi-dialog-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-3);
+}
+.pi-dialog-group + .pi-dialog-group {
+	padding-top: var(--size-4-2);
+	border-top: 1px solid var(--background-modifier-border);
+}
+.pi-dialog-group-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--size-2-3);
+}
+.pi-dialog-group-title {
+	font-size: var(--font-ui-medium);
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+	overflow-wrap: anywhere;
+}
+.pi-dialog-group-hint {
+	flex: none;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+.pi-dialog-group-desc {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.pi-dialog-required {
+	color: var(--text-error);
+}
+.pi-dialog-badge {
+	display: inline-block;
+	margin-left: var(--size-2-2);
+	padding: 0 var(--size-2-2);
+	border-radius: var(--radius-s);
+	background: color-mix(in srgb, var(--interactive-accent) 16%, transparent);
+	color: var(--text-accent);
+	font-size: 10px;
+	font-weight: var(--font-semibold);
+	vertical-align: middle;
+}
+.pi-dialog-other-row {
+	align-items: center;
+}
+.pi-dialog-other-input {
+	flex: 1;
+	min-width: 0;
+	border: none !important;
+	background: transparent !important;
+	box-shadow: none !important;
+	padding: 0 !important;
+	height: auto !important;
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+}
+.pi-dialog-other-standalone {
+	margin-top: var(--size-2-1);
+}
+.pi-dialog-footer {
+	position: sticky;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	margin: var(--size-2-2) calc(var(--size-4-3) * -1) 0;
+	padding: var(--size-4-2) var(--size-4-3);
+	border-top: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+.pi-dialog-status {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+.pi-dialog-send {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-2);
+}
+.pi-dialog-send .pi-icon svg {
+	width: 14px;
+	height: 14px;
+}
+.pi-dialog-send:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
 }
 .pi-dialog-key {
 	flex: none;

@@ -11,7 +11,7 @@ import type { InstalledPackage } from "../requirements";
 import { AcpClient } from "../rpc/AcpClient";
 import type { AcpSpawnOptions, AgentBackend } from "../rpc/AgentClient";
 import type { PiSpawnOptions } from "../rpc/PiRpcClient";
-import type { ImageContent, ThinkingLevel } from "../rpc/types";
+import type { ImageContent, ThinkingLevel, UiResponse } from "../rpc/types";
 import { listSessions, type SessionSummary } from "../sessions";
 import { snapshotAfter, snapshotBefore, unchangedSince, type FileSnapshot } from "../view/revert";
 import { acceptWebSocket, ServerWebSocket, tokensMatch } from "./ws";
@@ -529,7 +529,7 @@ export class PiRemoteServer {
 		const id = typeof parsed.id === "string" ? parsed.id : undefined;
 
 		if (type === "extension_ui_response" && id) {
-			acp.respondToUi(id, parsed as unknown as { value: string } | { confirmed: boolean } | { cancelled: true });
+			acp.respondToUi(id, parsed as unknown as UiResponse);
 			return;
 		}
 
@@ -995,7 +995,7 @@ export class PiRemoteServer {
 			case "extension_ui_request":
 				if (
 					typeof msg.id === "string" &&
-					(msg.method === "select" || msg.method === "confirm" || msg.method === "input" || msg.method === "editor")
+					(msg.method === "select" || msg.method === "confirm" || msg.method === "input" || msg.method === "editor" || msg.method === "form")
 				) {
 					entry.pendingUiRequests.set(msg.id, line);
 				}
