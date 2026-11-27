@@ -27,6 +27,17 @@ import { transcriptMarkdown } from "../exportNote";
 import { linkedSession, writeLink } from "../noteLink";
 import { EDITING_TOOLS, type FileSnapshot } from "./revert";
 import { activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, editInPlace, entryIdOf, TREE_COMMAND, type ActiveBranch } from "./editMessage";
+import {
+	buildEvaluatorPrompt,
+	buildHandoffPrompt,
+	buildRetroPrompt,
+	extractTouchedPath,
+	formatVerifyRetryPrompt,
+	LoopGuard,
+	type FrictionEntry,
+	type FrictionKind,
+	type VerifyResult,
+} from "../harness";
 
 const STICK_TO_BOTTOM_PX = 48;
 const MCP_RECHECK_MS = 30_000;
@@ -36,6 +47,9 @@ const MCP_RECHECK_MS = 30_000;
 const PANEL_COMMANDS: SlashCommand[] = [
 	{ name: "compact", description: "Summarize the conversation to free up context. Optional: what to focus on.", source: "panel" },
 	{ name: "reload", description: "Reload extensions, skills, prompt templates, context files and settings. The conversation stays.", source: "panel" },
+	{ name: "handoff", description: "Create a structured clean-context handoff contract in a fresh tab.", source: "panel" },
+	{ name: "evaluate", description: "Open a blind evaluator in a fresh tab (cross-backend) to audit recent changes.", source: "panel" },
+	{ name: "retro", description: "Inspect recorded friction events and propose permanent mechanical harness fixes.", source: "panel" },
 ];
 
 // Output this long, or on several lines, is something to read: it goes in the transcript.
@@ -87,6 +101,8 @@ export interface SessionHost {
 	// Session files were created, renamed or swapped.
 	sessionsChanged(): void;
 	closeDrawer(): void;
+	// Open a fresh empty tab prefilled (and optionally auto-sent) with a clean prompt.
+	openFreshTab(prompt: string, opts?: { backend?: AgentBackend; autoSend?: boolean }): void;
 }
 
 type ActiveSubagent = SubagentInfo;
@@ -133,6 +149,14 @@ export class ChatSession {
 	private piQueue: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
 	private activeBranches: ActiveBranch[] = [];
 	private hasConversation = false;
+	private loopGuard = new LoopGuard();
+	private editedFilesThisTurn = new Set<string>();
+	private editedFilesSession = new Set<string>();
+	private sessionFriction: FrictionEntry[] = [];
+	private verifyRetries = 0;
+	private verifying = false;
+	private isVerifyRetryTurn = false;
+	private lastVerifyResult: VerifyResult | null = null;
 
 	private messagesEl!: HTMLElement;
 	private bannerEl!: HTMLElement;
@@ -881,6 +905,116 @@ export class ChatSession {
 		new Notice(`Exported to ${file.basename}.`);
 	}
 
+	private recordSessionFriction(kind: FrictionKind, detail: string, tool?: string): void {
+		const entry: FrictionEntry = {
+			ts: Date.now(),
+			kind,
+			backend: this.backend,
+			sessionTitle: this.title,
+			tool,
+			detail: detail.slice(0, 220),
+		};
+		this.sessionFriction.push(entry);
+		this.plugin.recordFriction(entry);
+	}
+
+	async handoffToFreshTab(): Promise<void> {
+		if (!this.client.running) {
+			new Notice(`${this.backendLabel} isn't running in this tab.`);
+			return;
+		}
+		const [messages, git] = await Promise.all([
+			this.client.getMessages().catch(() => [] as AgentMessage[]),
+			this.plugin.readGitSnapshot().catch(() => null),
+		]);
+		if (!messages.length && !this.editedFilesSession.size) {
+			new Notice("Nothing to hand off yet.");
+			return;
+		}
+		const prompt = buildHandoffPrompt({
+			title: this.title,
+			messages,
+			editedFiles: [...this.editedFilesSession],
+			todos: this.todos.summary,
+			friction: this.sessionFriction,
+			lastVerify: this.lastVerifyResult,
+			git,
+		});
+		this.host.openFreshTab(prompt, { backend: this.backend, autoSend: false });
+		new Notice("Clean handoff contract opened in a fresh tab. Review and press Enter.");
+	}
+
+	async blindEvaluateInFreshTab(targetBackend?: AgentBackend): Promise<void> {
+		if (!this.client.running) {
+			new Notice(`${this.backendLabel} isn't running in this tab.`);
+			return;
+		}
+		const [messages, git] = await Promise.all([
+			this.client.getMessages().catch(() => [] as AgentMessage[]),
+			this.plugin.readGitSnapshot().catch(() => null),
+		]);
+		if (!messages.length && !this.editedFilesSession.size && !git?.diffStat) {
+			new Notice("Nothing to evaluate yet.");
+			return;
+		}
+		const prompt = buildEvaluatorPrompt({
+			title: this.title,
+			messages,
+			editedFiles: [...this.editedFilesSession],
+			verifyCommand: this.plugin.settings.verifyCommand.trim() || undefined,
+			lastVerify: this.lastVerifyResult,
+			git,
+		});
+		const backend = targetBackend ?? (this.backend === "pi" ? "acp" : "pi");
+		this.host.openFreshTab(prompt, { backend, autoSend: false });
+		new Notice(`Blind evaluator opened in a fresh ${backendLabel(backend)} tab.`);
+	}
+
+	async runRetro(): Promise<void> {
+		const globalLog = this.plugin.settings.frictionLog;
+		if (!this.sessionFriction.length && !globalLog.length) {
+			new Notice("No friction events recorded yet (tool errors, verify failures, loop alerts, or edit undos).");
+			return;
+		}
+		const prompt = buildRetroPrompt(this.sessionFriction, globalLog, this.app.vault.getName());
+		this.host.openFreshTab(prompt, { backend: this.backend, autoSend: false });
+		new Notice("Harness retro prompt opened in a fresh tab.");
+	}
+
+	private async runVerifyOnStop(): Promise<void> {
+		const command = this.plugin.settings.verifyCommand.trim();
+		if (!command || this.verifying || !this.plugin.hasLocalFs) return;
+		this.verifying = true;
+		this.setActivity("Verifying…");
+		try {
+			const result = await this.plugin.runVerify(command);
+			if (!result) return;
+			this.lastVerifyResult = result;
+			if (result.ok) {
+				this.verifyRetries = 0;
+				this.renderNotice(`Verify passed (${Math.round(result.durationMs)}ms) · ${result.summary}`);
+				return;
+			}
+			this.recordSessionFriction("verify_fail", `${command} → ${result.summary}`);
+			const maxRetries = Math.max(0, this.plugin.settings.verifyMaxRetries ?? 2);
+			if (this.verifyRetries < maxRetries && this.client.running) {
+				this.verifyRetries++;
+				const attempt = this.verifyRetries;
+				this.renderNotice(`Verify failed (auto-fix ${attempt}/${maxRetries}) · ${result.summary}`, true);
+				this.isVerifyRetryTurn = true;
+				await this.client.prompt(formatVerifyRetryPrompt(command, result, attempt, maxRetries));
+			} else {
+				this.verifyRetries = 0;
+				this.renderNotice(`Verify failed (${maxRetries ? `after ${maxRetries} auto-fix attempts` : "auto-fix disabled"}) · ${result.summary}`, true);
+			}
+		} catch (err) {
+			this.renderNotice(`Verify error: ${(err as Error).message}`, true);
+		} finally {
+			this.verifying = false;
+			if (!this.busy) this.setActivity(null);
+		}
+	}
+
 	// Records this tab's session in the note's properties, now or as soon as pi names the file.
 	linkToNote(note: TFile): void {
 		const sessionFile = this.state?.sessionFile;
@@ -1051,6 +1185,21 @@ export class ChatSession {
 			void this.configureAdvisor();
 			return true;
 		}
+		if (/^\/handoff\s*$/.test(text)) {
+			void this.handoffToFreshTab();
+			return true;
+		}
+		const evalMatch = text.match(/^\/evaluate(?:\s+(pi|agy|acp))?\s*$/i);
+		if (evalMatch) {
+			const arg = evalMatch[1]?.toLowerCase();
+			const target: AgentBackend | undefined = arg === "pi" ? "pi" : arg === "agy" || arg === "acp" ? "acp" : undefined;
+			void this.blindEvaluateInFreshTab(target);
+			return true;
+		}
+		if (/^\/retro\s*$/.test(text)) {
+			void this.runRetro();
+			return true;
+		}
 		return false;
 	}
 
@@ -1085,6 +1234,7 @@ export class ChatSession {
 
 	async stop(): Promise<void> {
 		if (!this.client.running || !this.busy) return;
+		this.recordSessionFriction("user_abort", `User stopped ${this.backendLabel} mid-turn`);
 		// abort would go on to run queued messages; hand them back to the editor instead.
 		await this.unqueue();
 		await this.client.abort().catch(() => {});
@@ -1441,17 +1591,33 @@ export class ChatSession {
 		switch (e.type) {
 			case "agent_start":
 				this.subagentsLaunchedThisTurn = false;
+				this.loopGuard.reset();
+				this.editedFilesThisTurn.clear();
+				if (!this.isVerifyRetryTurn) this.verifyRetries = 0;
+				this.isVerifyRetryTurn = false;
 				this.setBusy(true);
 				this.setActivity("Working…");
 				void this.checkMcp();
 				break;
 			case "agent_settled":
 				if (!this.host.isShowing(this)) this.unread = true;
-				if (e.aborted) this.subagentsLaunchedThisTurn = false;
+				if (e.aborted) {
+					this.subagentsLaunchedThisTurn = false;
+					this.verifyRetries = 0;
+				}
 				this.setBusy(false);
 				this.settleToolGroup();
 				this.live = null;
 				void this.refreshStats();
+				if (
+					!e.aborted &&
+					!this.verifying &&
+					this.plugin.hasLocalFs &&
+					this.plugin.settings.verifyCommand.trim() &&
+					this.editedFilesThisTurn.size > 0
+				) {
+					void this.runVerifyOnStop();
+				}
 				break;
 			case "message_start":
 				if (e.message.role === "user") {
@@ -1503,6 +1669,24 @@ export class ChatSession {
 					if (action) this.manageSubagentActions.set(e.toolCallId, action);
 				}
 				this.setActivity(formatActivityText(e.toolName, e.args));
+				{
+					const touched = extractTouchedPath(e.toolName, e.args);
+					if (touched) {
+						this.editedFilesThisTurn.add(touched);
+						this.editedFilesSession.add(touched);
+					}
+					const budgetAlert = this.loopGuard.onToolStart(
+						e.toolCallId,
+						e.toolName,
+						e.args,
+						this.plugin.settings.maxToolCallsPerTurn,
+					);
+					if (budgetAlert?.kind === "budget") {
+						this.recordSessionFriction("doom_loop", `Hit per-turn tool call budget (${budgetAlert.count}/${budgetAlert.limit})`, e.toolName);
+						this.renderNotice(`Harness guard: stopped at ${budgetAlert.count}/${budgetAlert.limit} tool calls in this turn.`, true);
+						void this.client.abort().catch(() => {});
+					}
+				}
 				if (EDITING_TOOLS.has(e.toolName) && typeof e.args?.path === "string") {
 					this.snapshots.set(e.toolCallId, this.plugin.snapshotBeforeEdit(this.absolutePath(e.args.path)));
 				}
@@ -1538,6 +1722,35 @@ export class ChatSession {
 				}
 				card.setResult(e.result, e.isError);
 				card.setStatus(e.isError ? "error" : "done");
+				{
+					const errText = e.isError ? contentText(e.result?.content ?? []).trim() : "";
+					if (e.isError) {
+						const firstLine = errText.split(/\r?\n/)[0]?.slice(0, 160) || "tool failed";
+						this.recordSessionFriction("tool_error", firstLine, e.toolName);
+					}
+					const loopAlert = this.loopGuard.onToolEnd(
+						e.toolCallId,
+						e.toolName,
+						e.isError,
+						errText,
+						this.plugin.settings.doomLoopThreshold,
+					);
+					if (loopAlert?.kind === "doom_loop") {
+						this.recordSessionFriction("doom_loop", `${loopAlert.toolName} repeated ${loopAlert.count}× (${loopAlert.detail})`, loopAlert.toolName);
+						this.renderNotice(`Loop guard: ${loopAlert.toolName} repeated ${loopAlert.count}× (${loopAlert.detail}).`, true);
+						if (this.client.capabilities.queueing && this.busy) {
+							void this.client
+								.steer(
+									`[Harness loop guard] You repeated ${loopAlert.toolName} ${loopAlert.count} times without progress (${loopAlert.detail}). Stop retrying the same call, diagnose the root cause, change strategy, or ask the user.`,
+								)
+								.catch(() => {});
+						}
+					} else if (loopAlert?.kind === "severe_loop") {
+						this.recordSessionFriction("doom_loop", `Halted severe loop on ${loopAlert.toolName} (${loopAlert.count}×)`, loopAlert.toolName);
+						this.renderNotice(`Loop guard halted runaway retries on ${loopAlert.toolName} (${loopAlert.count}×).`, true);
+						void this.client.abort().catch(() => {});
+					}
+				}
 				void this.offerRevert(e.toolCallId, e.toolName, e.isError);
 				this.setActivity(
 					e.toolName === "invoke_subagent" && this.activeSubagents.size > 0
@@ -2107,6 +2320,9 @@ export class ChatSession {
 			} catch (err) {
 				new Notice(`Couldn't change the file: ${(err as Error).message}`);
 				return;
+			}
+			if (snapshot.current === "before") {
+				this.recordSessionFriction("user_undo", `User reverted ${toolName} on ${relative(this.plugin.vaultPath, snapshot.path)}`, toolName);
 			}
 			card.setRevert(snapshot.current === "after" ? "applied" : "reverted", swap);
 			this.keepScrolled();

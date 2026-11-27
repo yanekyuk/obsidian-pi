@@ -51,6 +51,9 @@ export { buildSystemPrompt, rewordMessage, withContext } from ${JSON.stringify(j
 export { DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND } from ${JSON.stringify(join(root, "pi-extension/panel-shell.ts"))};
 export { SearchIndex } from ${JSON.stringify(join(root, "src/search/SearchIndex.ts"))};
 export { default as trimToolOutput } from ${JSON.stringify(join(root, "pi-extension/trim-tool-output.ts"))};
+export { lineHash, formatHashlines, applyHashlineEdits } from ${JSON.stringify(join(root, "pi-extension/hashline.ts"))};
+export { capMcpText } from ${JSON.stringify(join(root, "src/mcpBridge.ts"))};
+export { extractTouchedPath, runVerifyCommand, formatVerifyRetryPrompt, LoopGuard, appendFriction, buildRetroPrompt, buildHandoffPrompt, buildEvaluatorPrompt } from ${JSON.stringify(join(root, "src/harness.ts"))};
 export { PiRemoteServer } from ${JSON.stringify(join(root, "src/remote/server.ts"))};
 export { PiRemoteClient } from ${JSON.stringify(join(root, "src/remote/client.ts"))};
 export { DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } from ${JSON.stringify(join(root, "src/remote/ws.ts"))};`,
@@ -61,14 +64,15 @@ const obsidianStub = {
 	setup(build) {
 		build.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "stub" }));
 		build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: "pi", namespace: "stub" }));
+		build.onResolve({ filter: /^typebox$/ }, () => ({ path: "typebox", namespace: "stub" }));
 		build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
-			contents: "export class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport class PluginSettingTab {}\nexport class Setting {}\nexport const createBashTool = () => {};\nexport const createLocalBashOperations = () => {};\nexport const createPowerShellTool = () => {};\nexport const createLocalPowerShellOperations = () => {};\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');\nexport const getAllTags = () => [];",
+			contents: "export class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport class PluginSettingTab {}\nexport class Setting {}\nexport const Type = new Proxy({}, { get: () => () => ({}) });\nexport const createBashTool = () => {};\nexport const createLocalBashOperations = () => {};\nexport const createPowerShellTool = () => {};\nexport const createLocalPowerShellOperations = () => {};\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');\nexport const getAllTags = () => [];",
 		}));
 	},
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parseElicitationFields, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, backendLabel, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput, PiRemoteServer, PiRemoteClient, DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } =
+const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parseElicitationFields, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, backendLabel, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput, lineHash, formatHashlines, applyHashlineEdits, capMcpText, extractTouchedPath, runVerifyCommand, formatVerifyRetryPrompt, LoopGuard, appendFriction, buildRetroPrompt, buildHandoffPrompt, buildEvaluatorPrompt, PiRemoteServer, PiRemoteClient, DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -371,6 +375,97 @@ const check = (ok, label, detail = "") => {
 	const withImage = conversation(6);
 	withImage[2] = { ...withImage[2], content: [{ type: "image", data: "AAAA", mimeType: "image/png" }] };
 	check(onContext({ type: "context", messages: withImage }).messages[2].content[0].text.includes("1 image"), "trim: an old screenshot is trimmed whatever its size");
+	const withErr = conversation(6);
+	withErr[2] = { ...withErr[2], isError: true, content: [{ type: "text", text: "ENOENT: file missing\n" + big }] };
+	const errStandIn = onContext({ type: "context", messages: withErr }).messages[2].content[0].text;
+	check(errStandIn.includes("Error: ENOENT: file missing"), "trim: bulky error stand-in preserves the first error line", errStandIn);
+}
+
+// ---- harness engineering: MCP cap, verify-on-stop, loop guard, friction retro, handoff/evaluator, hashline
+{
+	const { readFileSync } = await import("fs");
+	// MCP payload cap & temp spill
+	check(capMcpText("obsidian_search", "short", 100, work) === "short", "mcp cap: short payloads pass through untouched");
+	const huge = "A".repeat(400) + "MIDDLE".repeat(100) + "Z".repeat(400);
+	const capped = capMcpText("browser_read", huge, 600, work);
+	const spillMatch = capped.match(/Full output saved to (\S+)/);
+	check(capped.length < huge.length && Boolean(spillMatch) && readFileSync(spillMatch[1], "utf8") === huge, "mcp cap: oversized output spills full text to a temp file and returns head+tail preview");
+
+	// File-mutating path extraction
+	check(extractTouchedPath("edit_file", { Path: "Notes/A.md" }) === "Notes/A.md" && extractTouchedPath("hashline_edit", { path: "x.ts" }) === "x.ts" && extractTouchedPath("read", { path: "x.ts" }) === null, "harness: detects file-mutating tools across Pi, Agy, and hashline");
+
+	// Verify-on-stop oracle runner
+	const passRes = await runVerifyCommand("echo 'VERIFY OK'", work, process.env);
+	check(passRes.ok && passRes.exitCode === 0 && passRes.summary === "VERIFY OK", "verify oracle: captures passing command summary");
+	const failRes = await runVerifyCommand("echo 'ERROR note.md: missing up' && exit 1", work, process.env);
+	const retryPrompt = formatVerifyRetryPrompt("scripts/verify.sh", failRes, 1, 2);
+	check(!failRes.ok && failRes.exitCode === 1 && retryPrompt.includes("attempt 1/2") && retryPrompt.includes("ERROR note.md: missing up"), "verify oracle: failing command builds concise retry prompt");
+
+	// LoopGuard: doom loop + severe loop + step budget + reset on success
+	const guard = new LoopGuard();
+	guard.onToolStart("c1", "edit", { path: "a.md" }, 0);
+	check(guard.onToolEnd("c1", "edit", true, "target not found", 3) === null, "loop guard: 1st error is ignored");
+	guard.onToolStart("c2", "edit", { path: "a.md" }, 0);
+	check(guard.onToolEnd("c2", "edit", true, "target not found", 3) === null, "loop guard: 2nd error is ignored");
+	guard.onToolStart("c3", "edit", { path: "a.md" }, 0);
+	const doom = guard.onToolEnd("c3", "edit", true, "target not found", 3);
+	check(doom?.kind === "doom_loop" && doom.count === 3, "loop guard: 3rd identical failure raises doom_loop");
+	guard.onToolStart("c4", "edit", { path: "a.md" }, 0);
+	guard.onToolEnd("c4", "edit", true, "target not found", 3);
+	guard.onToolStart("c5", "edit", { path: "a.md" }, 0);
+	const severe = guard.onToolEnd("c5", "edit", true, "target not found", 3);
+	check(severe?.kind === "severe_loop" && severe.count === 5, "loop guard: sustained retries escalate to severe_loop");
+	guard.reset();
+	guard.onToolStart("b1", "read", { path: "a" }, 2);
+	const budget = guard.onToolStart("b2", "read", { path: "b" }, 2);
+	check(budget?.kind === "budget" && budget.count === 2, "loop guard: enforces per-turn tool call budget");
+
+	// Friction log + /retro + Handoff + Blind Evaluator prompts
+	let log = [];
+	for (let i = 0; i < 105; i++) log = appendFriction(log, { ts: i, kind: "tool_error", backend: "pi", tool: "edit", detail: `err ${i}` });
+	check(log.length === 100 && log[0].ts === 5, "friction log: caps persisted history at 100 entries");
+	const retro = buildRetroPrompt(log.slice(-2), log, "Main");
+	check(retro.includes("tool_error:edit ×100") && retro.includes("mechanical harness fix"), "retro: highlights recurring patterns and demands mechanical fixes");
+	const sampleMsgs = [
+		{ role: "user", content: "<obsidian-context>\nActive note: X.md\n</obsidian-context>\n\nBuild the oracle" },
+		{ role: "assistant", content: [{ type: "text", text: "Created verify script." }] },
+	];
+	const handoff = buildHandoffPrompt({ title: "Oracle", messages: sampleMsgs, editedFiles: ["scripts/verify.sh"], friction: log.slice(-1) });
+	check(handoff.includes("Build the oracle") && handoff.includes("scripts/verify.sh") && handoff.includes("Dead ends & friction"), "handoff: generates structured fresh-context contract");
+	const evalPrompt = buildEvaluatorPrompt({ title: "Oracle", messages: sampleMsgs, editedFiles: ["scripts/verify.sh"], verifyCommand: ".agents/scripts/verify_vault.sh" });
+	check(evalPrompt.includes("default FAIL") && evalPrompt.includes(".agents/scripts/verify_vault.sh") && !evalPrompt.includes("Created verify script."), "blind evaluator: excludes generator claims and includes spec + verify oracle");
+
+	// Hashline read/edit
+	const src = "alpha\nbeta\ngamma\ndelta";
+	const formatted = formatHashlines(src);
+	const h2 = lineHash("beta");
+	const h3 = lineHash("gamma");
+	const h4 = lineHash("delta");
+	check(formatted.text.includes(`2:${h2}|beta`), "hashline: formats <line>:<2-hex-hash>|text anchors");
+	const edited = applyHashlineEdits(src, [
+		{ op: "replace", start: `2:${h2}`, end: `3:${h3}`, content: "BETA\nGAMMA" },
+		{ op: "insert_after", anchor: `4:${h4}`, content: "epsilon" },
+	]);
+	check(edited.content === "alpha\nBETA\nGAMMA\ndelta\nepsilon" && edited.applied === 2, "hashline: applies multi-hunk replace + insert_after atomically bottom-up");
+	const deleted = applyHashlineEdits(src, [{ op: "delete", start: `2:${h2}` }]);
+	check(deleted.content === "alpha\ngamma\ndelta", "hashline: deletes anchored line cleanly");
+	let staleThrew = "";
+	try {
+		applyHashlineEdits(src, [{ op: "replace", start: "2:00", content: "bad" }]);
+	} catch (err) {
+		staleThrew = err.message;
+	}
+	check(staleThrew.includes("Hash mismatch") && staleThrew.includes(`2:${h2}|beta`), "hashline: rejects stale hash and returns fresh anchors around mismatch");
+	let overlapThrew = false;
+	try {
+		applyHashlineEdits(src, [
+			{ op: "replace", start: `2:${h2}`, end: `3:${h3}`, content: "x" },
+			{ op: "delete", start: `3:${h3}` },
+		]);
+	} catch {
+		overlapThrew = true;
+	}
+	check(overlapThrew, "hashline: rejects overlapping edit spans before mutating");
 }
 
 // ---- undo for pi's edits: what the panel keeps of a file around an edit or write
@@ -844,6 +939,8 @@ const models = () => ({
 	],
 	currentModelId: "gemini-4-neon-" + currentThought,
 });
+let activeSlowTimer = null;
+let activeSlowId = null;
 rl.on("line", (line) => {
 	if (!line.trim()) return;
 	const msg = JSON.parse(line);
@@ -858,8 +955,34 @@ rl.on("line", (line) => {
 	} else if (msg.method === "session/set_config_option") {
 		if (msg.params?.configId === "thought_level") currentThought = msg.params.value;
 		send({ jsonrpc: "2.0", id: msg.id, result: { configOptions: configOptions() } });
+	} else if (msg.method === "session/cancel") {
+		if (activeSlowTimer && activeSlowId !== null) {
+			clearTimeout(activeSlowTimer);
+			activeSlowTimer = null;
+			const cancelledId = activeSlowId;
+			activeSlowId = null;
+			send({ jsonrpc: "2.0", id: cancelledId, result: { stopReason: "cancelled" } });
+		}
 	} else if (msg.method === "session/prompt") {
 		const promptId = msg.id;
+		const promptText = String(msg.params?.prompt?.[0]?.text ?? "");
+		if (promptText.startsWith("slow:")) {
+			const tag = promptText.slice(5);
+			activeSlowId = promptId;
+			send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Working:" + tag }] } } });
+			activeSlowTimer = setTimeout(() => {
+				activeSlowTimer = null;
+				activeSlowId = null;
+				send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: " Done:" + tag }] } } });
+				send({ jsonrpc: "2.0", id: promptId, result: { stopReason: "end_turn" } });
+			}, 250);
+			return;
+		}
+		if (promptText.startsWith("echo:")) {
+			send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Echo:" + promptText.slice(5) }] } } });
+			send({ jsonrpc: "2.0", id: promptId, result: { stopReason: "end_turn" } });
+			return;
+		}
 		send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "session_info_update", title: "Agy Auto Title" } } });
 		send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "usage_update", used: 50000, size: 1000000 } } });
 		send({
@@ -1027,7 +1150,7 @@ rl.on("line", (line) => {
 	check(
 		acpRpc.running &&
 			acpRpc.backend === "acp" &&
-			!acpRpc.capabilities.queueing &&
+			acpRpc.capabilities.queueing &&
 			acpRpc.capabilities.thinkingLevels &&
 			acpState.sessionFile === "acp:mock-acp-1" &&
 			acpState.model?.id === "gemini-4-neon-high" &&
@@ -1088,6 +1211,87 @@ rl.on("line", (line) => {
 		!acpUnexpectedExit && acpReattached === true && acpStateAfterReconnect.sessionFile === "acp:mock-acp-1",
 		"remote Agy: unexpected WebSocket drop auto-reconnects and reattaches to running ACP session",
 	);
+
+	// Queue (followUp): runs queued message automatically after the active turn finishes.
+	const qEventsStart = acpEvents.length;
+	const waitSettled = () =>
+		new Promise((res, rej) => {
+			const timer = setTimeout(() => rej(new Error("timed out waiting for Agy queue/steer settle")), 5000);
+			const off = acpRpc.onEvent((e) => {
+				if (e.type === "agent_settled") {
+					clearTimeout(timer);
+					off();
+					res(e);
+				}
+			});
+		});
+	const waitWorking = (tag) =>
+		new Promise((res, rej) => {
+			const timer = setTimeout(() => rej(new Error(`timed out waiting for Working:${tag}`)), 5000);
+			const off = acpRpc.onEvent((e) => {
+				if (e.type === "message_update" && e.assistantMessageEvent?.type === "text_delta" && e.assistantMessageEvent.delta.includes(`Working:${tag}`)) {
+					clearTimeout(timer);
+					off();
+					res();
+				}
+			});
+		});
+	const followSettled = waitSettled();
+	const followStarted = waitWorking("first");
+	await acpRpc.prompt("slow:first");
+	await followStarted;
+	await acpRpc.followUp("echo:second");
+	await followSettled;
+	const followSlice = acpEvents.slice(qEventsStart);
+	const followTexts = (await acpRpc.getMessages())
+		.filter((m) => m.role === "assistant")
+		.map((m) => m.content.filter((b) => b.type === "text").map((b) => b.text).join(""));
+	check(
+		followSlice.some((e) => e.type === "queue_update" && e.followUp.includes("echo:second")) &&
+			followSlice.filter((e) => e.type === "agent_settled").length === 1 &&
+			followTexts.some((t) => t.includes("Done:first")) &&
+			followTexts.some((t) => t.includes("Echo:second")),
+		"remote Agy: followUp queues while streaming, emits queue_update, and drains after the active turn completes",
+	);
+
+	// Steer: cancels the active slow turn and immediately runs the steering message within one run.
+	const steerStartIdx = acpEvents.length;
+	const steerSettled = waitSettled();
+	const steerStarted = waitWorking("third");
+	await acpRpc.prompt("slow:third");
+	await steerStarted;
+	await acpRpc.steer("echo:pivoted");
+	const steerEnd = await steerSettled;
+	const steerSlice = acpEvents.slice(steerStartIdx);
+	const steerTexts = (await acpRpc.getMessages())
+		.filter((m) => m.role === "assistant")
+		.map((m) => m.content.filter((b) => b.type === "text").map((b) => b.text).join(""));
+	check(
+		steerSlice.some((e) => e.type === "queue_update" && e.steering.includes("echo:pivoted")) &&
+			!steerEnd.aborted &&
+			!steerTexts.some((t) => t.includes("Done:third")) &&
+			steerTexts.some((t) => t.includes("Echo:pivoted")),
+		"remote Agy: steer interrupts the active turn via session/cancel and immediately runs the steering prompt",
+	);
+
+	// clearQueue: removes queued followUp items before they run and returns them.
+	const clearSettled = waitSettled();
+	const clearStarted = waitWorking("fourth");
+	await acpRpc.prompt("slow:fourth");
+	await clearStarted;
+	await acpRpc.followUp("echo:dropme");
+	const cleared = await acpRpc.clearQueue();
+	await clearSettled;
+	const clearTexts = (await acpRpc.getMessages())
+		.filter((m) => m.role === "assistant")
+		.map((m) => m.content.filter((b) => b.type === "text").map((b) => b.text).join(""));
+	check(
+		cleared.followUp.join(",") === "echo:dropme" &&
+			cleared.steering.length === 0 &&
+			!clearTexts.some((t) => t.includes("Echo:dropme")),
+		"remote Agy: clearQueue drains pending items and prevents them from executing",
+	);
+
 	await acpRpc.stop();
 	await acpServer.stop();
 }
@@ -1150,7 +1354,7 @@ check(fromPackage.length === OBSIDIAN_SKILLS.length, `the Obsidian skills load f
 	let isolatedExit = null;
 	isolated.onExit((info) => (isolatedExit = info));
 	// With the plugin's own extensions loaded the way the panel loads them.
-	const extensions = ["browser", "obsidian", "trim-tool-output", "panel-shell"].flatMap((name) => ["-e", join(root, "pi-extension", `${name}.ts`)]);
+	const extensions = ["browser", "obsidian", "trim-tool-output", "panel-shell", "hashline"].flatMap((name) => ["-e", join(root, "pi-extension", `${name}.ts`)]);
 	await isolated.start({ binary: "pi", args: ["--no-session", "--no-skills", ...extensions], cwd: work, env: { ...env, PI_CODING_AGENT_DIR: isolatedDir } });
 	const theirs = await isolated.getCommands();
 	const usable = await isolated.getAvailableModels();

@@ -234,8 +234,9 @@ The launcher for Obsidian's CLI travels inside `main.js` (Obsidian only download
 ```bash
 npm install
 npm run build
-npm run install:vault            # the vault Obsidian has open, or: -- /path/to/vault
 ```
+
+Releases are published via GitHub tags and installed in Obsidian via [BRAT](https://github.com/TfTHacker/obsidian42-brat).
 
 The plugin's settings are under Obsidian's Settings → Agent Workbench, and one click away from the panel's `⋮` menu → Settings.
 
@@ -246,7 +247,6 @@ Then enable **Agent Workbench** under Settings → Community plugins, and open i
 ```bash
 npm run dev         # rebuild on change
 npm run test:rpc    # check the pi integration without Obsidian (add `-- --prompt` for the live checks: streaming, sessions, images; two small model calls)
-npm run install:test  # after a build: install it as "Agent Workbench (test)", next to the released plugin
 ```
 
 Layout: `src/requirements.ts` inspects recommended packages and owns their manual setup commands, `src/view/toolRenderers.ts` holds the per-tool cards, `src/rpc` is the JSONL client for `pi --mode rpc`, `src/remote` is the WebSocket and HTTP server and client for Obsidian Mobile, `src/view` is the panel, `src/env.ts` recovers the login shell's `PATH` (apps started from the Dock don't get it), `src/prompt.ts` holds the system prompt and the active-note context block, and `src/search` is `obsidian_search`: `SearchIndex.ts` ranks (no Obsidian API, tested by `test:rpc`) and `VaultSearch.ts` keeps it fed from the vault. The pi extensions the plugin ships are in `pi-extension/`. Ideas not built yet: [docs/semantic-search.md](docs/semantic-search.md).

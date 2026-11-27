@@ -1,14 +1,12 @@
 {
   "name": "obsidian-pi",
-  "version": "0.1.46",
+  "version": "0.1.47",
   "description": "Obsidian harness for Pi and Agy coding agents",
   "main": "main.js",
   "type": "module",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
-    "install:vault": "node scripts/install.mjs",
-    "install:test": "node scripts/install.mjs --test",
     "test:rpc": "node scripts/rpc-smoke.mjs"
   },
   "keywords": [

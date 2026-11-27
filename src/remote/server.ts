@@ -29,6 +29,7 @@ export interface RemoteSessionOverrides {
 	browserControl?: boolean;
 	obsidianControl?: boolean;
 	trimToolOutput?: boolean;
+	hashlineEdit?: boolean;
 }
 
 export interface RemoteServerHost {

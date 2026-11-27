@@ -1,8 +1,39 @@
 import { randomBytes } from "crypto";
+import { writeFileSync } from "fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "http";
+import { tmpdir } from "os";
+import { join } from "path";
 import type { BrowserControl } from "./browser";
 import type { ObsidianControl } from "./obsidianControl";
 import type { AcpMcpServerStdio } from "./rpc/AgentClient";
+
+export const MAX_MCP_TEXT_CHARS = 24_000;
+
+/** Caps oversized MCP tool responses so a single huge DOM or search dump cannot poison the context.
+ * Full output is spilled to a temp file so the agent can read specific slices on demand. */
+export function capMcpText(
+	toolName: string,
+	raw: string,
+	maxChars = MAX_MCP_TEXT_CHARS,
+	spillDir = tmpdir(),
+): string {
+	if (raw.length <= maxChars) return raw;
+	const safeName = toolName.replace(/[^a-zA-Z0-9_-]/g, "_");
+	const spillPath = join(spillDir, `obsidian-workbench-${safeName}-${randomBytes(4).toString("hex")}.txt`);
+	let savedNote = "";
+	try {
+		writeFileSync(spillPath, raw, "utf8");
+		savedNote = ` Full output saved to ${spillPath} (read slices with offset/limit).`;
+	} catch {
+		savedNote = "";
+	}
+	const headLen = Math.floor(maxChars * 0.7);
+	const tailLen = Math.max(0, maxChars - headLen - 300);
+	const head = raw.slice(0, headLen);
+	const tail = tailLen > 0 ? raw.slice(-tailLen) : "";
+	const omitted = raw.length - head.length - tail.length;
+	return `${head}\n\n[… ${omitted} chars omitted from ${toolName} (${raw.length} chars total).${savedNote}]\n\n${tail}`;
+}
 
 interface McpToolDef {
 	name: string;
@@ -74,7 +105,7 @@ const OBSIDIAN_TOOLS: McpToolDef[] = [
 		inputSchema: {
 			type: "object",
 			properties: {
-				prefix: { type: "string", description: "Optional command ID or name filter." },
+				query: { type: "string", description: "Optional words to filter command IDs or names." },
 			},
 		},
 	},
@@ -301,21 +332,29 @@ export class ObsidianMcpBridge {
 		if (name.startsWith("obsidian_")) {
 			if (!opts.obsidianControl) return { content: [{ type: "text", text: "Obsidian tools are disabled in settings." }], isError: true };
 			const action = name.slice("obsidian_".length);
-			const raw = await this.obsidian.handle(JSON.stringify({ ...args, action }));
+			const normalized = action === "commands" && args.query === undefined && typeof args.prefix === "string"
+				? { ...args, query: args.prefix }
+				: args;
+			const raw = await this.obsidian.handle(JSON.stringify({ ...normalized, action }));
 			const parsed = JSON.parse(raw) as { error?: string };
-			return { content: [{ type: "text", text: raw }], isError: Boolean(parsed.error) };
+			return { content: [{ type: "text", text: capMcpText(name, raw) }], isError: Boolean(parsed.error) };
 		}
 		if (name.startsWith("browser_")) {
 			if (!opts.browserControl) return { content: [{ type: "text", text: "Browser tools are disabled in settings." }], isError: true };
 			const action = name.slice("browser_".length);
 			const raw = await this.browser.handle(JSON.stringify({ ...args, action }));
-			const parsed = JSON.parse(raw) as { error?: string; image?: string; mimeType?: string };
-			if (parsed.image && parsed.mimeType) {
+			const parsed = JSON.parse(raw) as { error?: string; data?: string; image?: string; mimeType?: string; title?: string; url?: string };
+			const imgData = parsed.data ?? parsed.image;
+			if (imgData && parsed.mimeType) {
+				const caption = [parsed.title || "(untitled)", parsed.url ?? ""].filter(Boolean).join("\n");
 				return {
-					content: [{ type: "image", data: parsed.image, mimeType: parsed.mimeType }],
+					content: [
+						...(caption ? [{ type: "text", text: caption }] : []),
+						{ type: "image", data: imgData, mimeType: parsed.mimeType },
+					],
 				};
 			}
-			return { content: [{ type: "text", text: raw }], isError: Boolean(parsed.error) };
+			return { content: [{ type: "text", text: capMcpText(name, raw) }], isError: Boolean(parsed.error) };
 		}
 		return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
 	}

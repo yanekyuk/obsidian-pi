@@ -26,6 +26,7 @@ import type { AcpSpawnOptions, AgentBackend, AgentSpawnOptions } from "./rpc/Age
 import type { PiSpawnOptions } from "./rpc/PiRpcClient";
 import { listSessions, type SessionSummary } from "./sessions";
 import { DEFAULT_SETTINGS, PiAgentSettingTab, type PiAgentSettings } from "./settings";
+import { appendFriction, readGitSnapshot, runVerifyCommand, type FrictionEntry, type GitSnapshot, type VerifyResult } from "./harness";
 import type { ChatSession } from "./view/ChatSession";
 import { ChatView, VIEW_TYPE_PI } from "./view/ChatView";
 import { snapshotAfter, snapshotBefore, swapVersion, unchangedSince, type FileSnapshot } from "./view/revert";
@@ -77,7 +78,12 @@ export default class PiAgentPlugin extends Plugin {
 	async onload(): Promise<void> {
 		const loaded = ((await this.loadData()) ?? {}) as Record<string, unknown>;
 		const currentSettings = Object.fromEntries(Object.keys(DEFAULT_SETTINGS).filter((key) => key in loaded).map((key) => [key, loaded[key]])) as Partial<PiAgentSettings>;
-		this.settings = { ...DEFAULT_SETTINGS, ...currentSettings, inherit: { ...DEFAULT_INHERITANCE, ...currentSettings.inherit } };
+		this.settings = {
+			...DEFAULT_SETTINGS,
+			...currentSettings,
+			inherit: { ...DEFAULT_INHERITANCE, ...currentSettings.inherit },
+			frictionLog: Array.isArray(currentSettings.frictionLog) ? currentSettings.frictionLog : [],
+		};
 		addIcon("pi", PI_ICON);
 		if (this.hasLocalFs) {
 			void resolveEnv(); // warm the shell PATH lookup before the first spawn
@@ -133,6 +139,9 @@ export default class PiAgentPlugin extends Plugin {
 			}),
 		);
 		this.addCommand({ id: "export-session", name: "Export conversation to a note", callback: async () => (await this.activateView())?.current().exportToNote() });
+		this.addCommand({ id: "handoff-tab", name: "Handoff to fresh tab", callback: async () => (await this.activateView())?.handoffCurrentTab() });
+		this.addCommand({ id: "blind-evaluate", name: "Blind review in fresh tab", callback: async () => (await this.activateView())?.blindEvaluateCurrentTab() });
+		this.addCommand({ id: "session-retro", name: "Session retro (promote harness fixes)", callback: async () => (await this.activateView())?.retroCurrentTab() });
 		this.addCommand({ id: "close-tab", name: "Close tab", callback: async () => (await this.activateView())?.closeCurrentTab() });
 		this.addCommand({ id: "switch-tab", name: "Switch tab", callback: async () => (await this.activateView())?.showTabs() });
 		this.addCommand({ id: "new-panel", name: "Open another chat panel", callback: () => void this.openNewPanel() });
@@ -486,6 +495,23 @@ export default class PiAgentPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
+	recordFriction(entry: FrictionEntry): void {
+		this.settings.frictionLog = appendFriction(this.settings.frictionLog, entry);
+		void this.saveSettings();
+	}
+
+	async runVerify(command = this.settings.verifyCommand): Promise<VerifyResult | null> {
+		const cmd = command.trim();
+		if (!this.hasLocalFs || !cmd) return null;
+		const env = await resolveEnv();
+		return runVerifyCommand(cmd, this.vaultPath, env);
+	}
+
+	async readGitSnapshot(): Promise<GitSnapshot | null> {
+		if (!this.hasLocalFs) return null;
+		return readGitSnapshot(this.vaultPath);
+	}
+
 	chatViews(): ChatView[] {
 		return this.app.workspace
 			.getLeavesOfType(VIEW_TYPE_PI)
@@ -599,6 +625,7 @@ export default class PiAgentPlugin extends Plugin {
 					browserControl: s.browserControl && this.hasLocalFs,
 					obsidianControl: s.obsidianControl,
 					trimToolOutput: s.trimToolOutput,
+					hashlineEdit: s.hashlineEdit,
 				},
 				backend,
 			);
@@ -641,6 +668,7 @@ export default class PiAgentPlugin extends Plugin {
 		const browserControl = overrides?.browserControl ?? s.browserControl;
 		const obsidianControl = overrides?.obsidianControl ?? s.obsidianControl;
 		const trimToolOutput = overrides?.trimToolOutput ?? s.trimToolOutput;
+		const hashlineEdit = overrides?.hashlineEdit ?? s.hashlineEdit;
 
 		const args: string[] = ["--append-system-prompt", buildSystemPrompt(this.app.vault.getName(), addendum)];
 
@@ -686,6 +714,7 @@ export default class PiAgentPlugin extends Plugin {
 		if (browserControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "browser.ts"));
 		if (obsidianControl && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "obsidian.ts"));
 		if (trimToolOutput && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "trim-tool-output.ts"));
+		if (hashlineEdit && this.manifest.dir) args.push("-e", join(vault, this.manifest.dir, "pi-extension", "hashline.ts"));
 
 		// Naive split is enough for flags; quote-aware parsing isn't worth it here.
 		args.push(...extraArgs.split(/\s+/).filter(Boolean));

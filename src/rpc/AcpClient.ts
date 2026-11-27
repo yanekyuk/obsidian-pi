@@ -83,6 +83,11 @@ interface TrackedToolCall {
 	ended: boolean;
 }
 
+interface QueuedAcpPrompt {
+	message: string;
+	images?: ImageContent[];
+}
+
 const VALID_THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const CANONICAL_TOOL_NAMES = new Set(["invoke_subagent", "manage_subagents", "ask_question", "update_steps"]);
 
@@ -242,6 +247,11 @@ export class AcpClient implements AgentClient {
 	private replayingHistory = false;
 	private unsolicitedTurn = false;
 	private unsolicitedTimer: ReturnType<typeof setTimeout> | null = null;
+	private steeringQueue: QueuedAcpPrompt[] = [];
+	private followUpQueue: QueuedAcpPrompt[] = [];
+	private draining = false;
+	private steerInterruptPending = false;
+	private userAborted = false;
 
 	// Per-turn streaming accumulators for translating ACP updates into pi-workbench events.
 	private textBlockIndex: number | null = null;
@@ -332,7 +342,7 @@ export class AcpClient implements AgentClient {
 				terminal: false,
 				elicitation: { form: {} },
 			},
-			clientInfo: { name: "agent-workbench", version: "0.1.46" },
+			clientInfo: { name: "agent-workbench", version: "0.1.47" },
 		});
 	}
 
@@ -359,6 +369,7 @@ export class AcpClient implements AgentClient {
 		this.contextSize = null;
 		this.usageTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 		this.resolvedElicitationDetails.clear();
+		this.resetQueues();
 		const mcpServers = opts.mcpServers ?? [];
 
 		let res: AcpSessionResponse;
@@ -461,6 +472,7 @@ export class AcpClient implements AgentClient {
 		this.pending.clear();
 		this.pendingPermissions.clear();
 		this.pendingElicitations.clear();
+		this.resetQueues();
 		this.settleUnsolicitedTurn("aborted");
 
 		await new Promise<void>((resolve) => {
@@ -519,6 +531,7 @@ export class AcpClient implements AgentClient {
 			this.clearUnsolicitedTimer();
 			this.unsolicitedTurn = false;
 			this.isStreaming = false;
+			this.resetQueues();
 			for (const fn of this.exitListeners) fn({ code, stderr: this.stderrTail, expected });
 		});
 	}
@@ -942,15 +955,38 @@ export class AcpClient implements AgentClient {
 		this.emit({ type: "message_start", message: assistantStart });
 	}
 
+	private emitQueueUpdate(): void {
+		this.emit({
+			type: "queue_update",
+			steering: this.steeringQueue.map((q) => q.message),
+			followUp: this.followUpQueue.map((q) => q.message),
+		});
+	}
+
+	private resetQueues(): void {
+		const hadQueued = this.steeringQueue.length > 0 || this.followUpQueue.length > 0;
+		this.steeringQueue = [];
+		this.followUpQueue = [];
+		this.draining = false;
+		this.steerInterruptPending = false;
+		this.userAborted = false;
+		if (hadQueued) this.emitQueueUpdate();
+	}
+
 	private settleUnsolicitedTurn(stopReason: "stop" | "aborted" | "error" = "stop", errorMessage?: string): void {
 		this.clearUnsolicitedTimer();
 		if (!this.unsolicitedTurn) return;
 		this.unsolicitedTurn = false;
+		const next = !this.stopping && stopReason === "stop" ? this.shiftNextQueued() : null;
+		if (next) {
+			this.finalizeAssistantMessage(stopReason, errorMessage);
+			void this.runPromptLoop(next, false).catch(() => {});
+			return;
+		}
 		this.finishAssistantTurn(stopReason, errorMessage);
 	}
 
-	private finishAssistantTurn(stopReason: "stop" | "aborted" | "error", errorMessage?: string): void {
-		this.isStreaming = false;
+	private finalizeAssistantMessage(stopReason: "stop" | "aborted" | "error", errorMessage?: string): void {
 		this.closeThinkingBlock();
 		this.closeTextBlock();
 		const finalAssistant: AgentMessage = {
@@ -962,40 +998,145 @@ export class AcpClient implements AgentClient {
 		};
 		this.messages.push(finalAssistant);
 		this.emit({ type: "message_end", message: finalAssistant });
+	}
+
+	private finishAssistantTurn(stopReason: "stop" | "aborted" | "error", errorMessage?: string): void {
+		this.isStreaming = false;
+		this.finalizeAssistantMessage(stopReason, errorMessage);
 		this.emit({ type: "agent_end" });
 		this.emit({ type: "agent_settled", aborted: stopReason === "aborted" });
 	}
 
+	private shiftNextQueued(): QueuedAcpPrompt | null {
+		if (this.steeringQueue.length > 0) {
+			const item = this.steeringQueue.shift()!;
+			this.emitQueueUpdate();
+			return item;
+		}
+		if (this.followUpQueue.length > 0) {
+			const item = this.followUpQueue.shift()!;
+			this.emitQueueUpdate();
+			return item;
+		}
+		return null;
+	}
+
+	private requestSteerInterrupt(): void {
+		if (this.steerInterruptPending || !this.sessionId) return;
+		this.steerInterruptPending = true;
+		this.notify("session/cancel", { sessionId: this.sessionId });
+	}
+
 	async prompt(message: string, opts: { streamingBehavior?: "steer" | "followUp"; images?: ImageContent[] } = {}): Promise<void> {
 		if (!this.sessionId) throw new Error("No active ACP session.");
-		this.settleUnsolicitedTurn("stop");
-		const promptBlocks: Record<string, unknown>[] = [{ type: "text", text: message }];
-		const userContent: ContentBlock[] = [{ type: "text", text: message }];
-		for (const img of opts.images ?? []) {
+
+		// Unsolicited background-subagent turn: queue follow-ups behind it, or interrupt immediately on steer/prompt.
+		if (this.unsolicitedTurn) {
+			if (opts.streamingBehavior === "followUp") {
+				this.followUpQueue.push({ message, images: opts.images });
+				this.emitQueueUpdate();
+				return;
+			}
+			this.settleUnsolicitedTurn("stop");
+		}
+
+		// Already streaming a prompt turn: enqueue into steering (interrupting the active step) or followUp (after task).
+		if (this.isStreaming || this.draining) {
+			if (opts.streamingBehavior === "steer") {
+				this.steeringQueue.push({ message, images: opts.images });
+				this.emitQueueUpdate();
+				this.requestSteerInterrupt();
+			} else {
+				this.followUpQueue.push({ message, images: opts.images });
+				this.emitQueueUpdate();
+			}
+			return;
+		}
+
+		await this.runPromptLoop({ message, images: opts.images }, true);
+	}
+
+	private async runPromptLoop(initial: QueuedAcpPrompt, emitStart: boolean): Promise<void> {
+		this.draining = true;
+		this.isStreaming = true;
+		this.userAborted = false;
+		this.steerInterruptPending = false;
+		if (emitStart) this.emit({ type: "agent_start" });
+
+		let current: QueuedAcpPrompt | null = initial;
+		let finalStopReason: "stop" | "aborted" | "error" = "stop";
+		let firstTurnError: Error | null = null;
+		let turnNumber = 0;
+
+		try {
+			while (current && this.sessionId && !this.stopping) {
+				turnNumber++;
+				const turn = await this.executeSingleTurn(current);
+
+				// Steer cancelled the in-flight turn: seamlessly hand off to the queued steering message.
+				if (this.steerInterruptPending && !this.userAborted) {
+					this.steerInterruptPending = false;
+					if (this.steeringQueue.length > 0) {
+						this.finalizeAssistantMessage("stop");
+						current = this.shiftNextQueued();
+						continue;
+					}
+				}
+
+				this.finalizeAssistantMessage(turn.stopReason, turn.errorMessage);
+				finalStopReason = turn.stopReason;
+
+				if (turn.error) {
+					if (turnNumber === 1) firstTurnError = turn.error;
+					break;
+				}
+				if (this.userAborted || turn.stopReason === "aborted") {
+					break;
+				}
+
+				const next = this.shiftNextQueued();
+				if (!next) break;
+				current = next;
+			}
+		} finally {
+			this.draining = false;
+			this.isStreaming = false;
+			this.steerInterruptPending = false;
+			const wasAborted = this.userAborted || finalStopReason === "aborted";
+			this.userAborted = false;
+			this.emit({ type: "agent_end" });
+			this.emit({ type: "agent_settled", aborted: wasAborted });
+		}
+
+		if (firstTurnError) throw firstTurnError;
+	}
+
+	private async executeSingleTurn(
+		item: QueuedAcpPrompt,
+	): Promise<{ stopReason: "stop" | "aborted" | "error"; errorMessage?: string; error?: Error }> {
+		const promptBlocks: Record<string, unknown>[] = [{ type: "text", text: item.message }];
+		const userContent: ContentBlock[] = [{ type: "text", text: item.message }];
+		for (const img of item.images ?? []) {
 			promptBlocks.push({ type: "image", data: img.data, mimeType: img.mimeType });
 			userContent.push(img);
 		}
 
 		const userMessage: AgentMessage = { role: "user", content: userContent, timestamp: Date.now() };
 		this.messages.push(userMessage);
-		this.isStreaming = true;
 		this.textBlockIndex = null;
 		this.thinkingBlockIndex = null;
 		this.turnBlocks = [];
 		this.activeTools.clear();
 
-		this.emit({ type: "agent_start" });
 		this.emit({ type: "turn_start" });
 		this.emit({ type: "message_start", message: userMessage });
 		this.emit({ type: "message_end", message: userMessage });
 		const assistantStart: AgentMessage = { role: "assistant", content: [], timestamp: Date.now() };
 		this.emit({ type: "message_start", message: assistantStart });
 
-		let stopReason: "stop" | "aborted" | "error" = "stop";
-		let errorMessage: string | undefined;
 		try {
 			const res = (await this.request("session/prompt", {
-				sessionId: this.sessionId,
+				sessionId: this.sessionId!,
 				prompt: promptBlocks,
 			})) as {
 				stopReason?: string;
@@ -1014,31 +1155,35 @@ export class AcpClient implements AgentClient {
 				if (typeof res.usage.cachedWriteTokens === "number") this.usageTokens.cacheWrite = res.usage.cachedWriteTokens;
 				if (typeof res.usage.totalTokens === "number") this.usageTokens.total = res.usage.totalTokens;
 			}
-			if (res?.stopReason === "cancelled") stopReason = "aborted";
+			return { stopReason: res?.stopReason === "cancelled" ? "aborted" : "stop" };
 		} catch (err) {
-			stopReason = "error";
-			errorMessage = (err as Error).message || String(err);
-			throw err;
-		} finally {
-			this.finishAssistantTurn(stopReason, errorMessage);
+			const error = err as Error;
+			return { stopReason: "error", errorMessage: error.message || String(error), error };
 		}
 	}
 
 	async steer(message: string, images?: ImageContent[]): Promise<void> {
-		await this.prompt(message, { images });
+		await this.prompt(message, { streamingBehavior: "steer", images });
 	}
 
 	async followUp(message: string, images?: ImageContent[]): Promise<void> {
-		await this.prompt(message, { images });
+		await this.prompt(message, { streamingBehavior: "followUp", images });
 	}
 
 	async abort(): Promise<void> {
 		if (!this.sessionId) return;
+		this.userAborted = true;
+		this.steerInterruptPending = false;
 		this.notify("session/cancel", { sessionId: this.sessionId });
 	}
 
 	async clearQueue(): Promise<{ steering: string[]; followUp: string[] }> {
-		return { steering: [], followUp: [] };
+		const steering = this.steeringQueue.splice(0).map((q) => q.message);
+		const followUp = this.followUpQueue.splice(0).map((q) => q.message);
+		if (steering.length || followUp.length) {
+			this.emitQueueUpdate();
+		}
+		return { steering, followUp };
 	}
 
 	async getState(): Promise<SessionState> {
@@ -1051,7 +1196,7 @@ export class AcpClient implements AgentClient {
 			sessionId: this.sessionId ?? undefined,
 			sessionName: this.sessionName,
 			messageCount: this.messages.length,
-			pendingMessageCount: 0,
+			pendingMessageCount: this.steeringQueue.length + this.followUpQueue.length,
 		};
 	}
 

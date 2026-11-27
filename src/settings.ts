@@ -6,6 +6,7 @@ import { disabled, enabled, isDisabled, readPackageEntries, replacePackageEntry,
 import { DEFAULT_SERVER_PORT, discoverServerUrls, generateServerToken } from "./remote/ws";
 import { findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE } from "./requirements";
 import type { AgentBackend } from "./rpc/AgentClient";
+import type { FrictionEntry } from "./harness";
 
 export interface PiAgentSettings {
 	backend: AgentBackend;
@@ -38,6 +39,13 @@ export interface PiAgentSettings {
 	commandAllowlist: string;
 	// Send the model stand-ins for bulky tool output from older turns (pi-extension/trim-tool-output.ts).
 	trimToolOutput: boolean;
+	// Harness engineering controls (verify-on-stop, loop guards, hashline edit, friction trace).
+	verifyCommand: string;
+	verifyMaxRetries: number;
+	doomLoopThreshold: number;
+	maxToolCallsPerTurn: number;
+	hashlineEdit: boolean;
+	frictionLog: FrictionEntry[];
 	// The model picker's last view: all models, or pi's scoped list (enabledModels).
 	showAllModels: boolean;
 	// Desktop server for Obsidian Mobile over Tailscale or LAN.
@@ -76,6 +84,12 @@ export const DEFAULT_SETTINGS: PiAgentSettings = {
 	obsidianControl: true,
 	commandAllowlist: "",
 	trimToolOutput: true,
+	verifyCommand: "",
+	verifyMaxRetries: 2,
+	doomLoopThreshold: 3,
+	maxToolCallsPerTurn: 0,
+	hashlineEdit: false,
+	frictionLog: [],
 	showAllModels: false,
 	serverEnabled: false,
 	serverPort: DEFAULT_SERVER_PORT,
@@ -332,6 +346,83 @@ export class PiAgentSettingTab extends PluginSettingTab {
 				t.setValue(s.systemPromptAddendum).onChange(async (v) => {
 					s.systemPromptAddendum = v;
 					await save();
+				}),
+			);
+
+		new Setting(containerEl).setName("Harness & verification").setHeading();
+
+		if (hasLocal) {
+			new Setting(containerEl)
+				.setName("Verify-on-stop command")
+				.setDesc('Runs automatically when a turn edits files and finishes (e.g. ".agents/scripts/verify_vault.sh" or "npm test"). Leave empty to disable.')
+				.addText((t) =>
+					t.setPlaceholder(".agents/scripts/verify_vault.sh").setValue(s.verifyCommand).onChange(async (v) => {
+						s.verifyCommand = v.trim();
+						await save();
+					}),
+				);
+
+			new Setting(containerEl)
+				.setName("Max verify auto-fix retries")
+				.setDesc("Maximum automatic fix rounds when verification fails (default 2). Prevents runaway retry loops.")
+				.addText((t) =>
+					t.setPlaceholder("2").setValue(String(s.verifyMaxRetries)).onChange(async (v) => {
+						const parsed = Number.parseInt(v.trim(), 10);
+						if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 5) {
+							s.verifyMaxRetries = parsed;
+							await save();
+						}
+					}),
+				);
+		}
+
+		new Setting(containerEl)
+			.setName("Doom-loop threshold")
+			.setDesc("Repeated failing tool calls before steering or halting the agent (default 3; 0 disables).")
+			.addText((t) =>
+				t.setPlaceholder("3").setValue(String(s.doomLoopThreshold)).onChange(async (v) => {
+					const parsed = Number.parseInt(v.trim(), 10);
+					if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 20) {
+						s.doomLoopThreshold = parsed;
+						await save();
+					}
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Max tool calls per turn")
+			.setDesc("Hard ceiling on tool calls in a single agent turn (0 = unlimited). Stops runaway loops.")
+			.addText((t) =>
+				t.setPlaceholder("0").setValue(String(s.maxToolCallsPerTurn)).onChange(async (v) => {
+					const parsed = Number.parseInt(v.trim(), 10);
+					if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 500) {
+						s.maxToolCallsPerTurn = parsed;
+						await save();
+					}
+				}),
+			);
+
+		if (hasLocal) {
+			new Setting(containerEl)
+				.setName("Hashline read/edit tools for Pi")
+				.setDesc("Loads pi-extension/hashline.ts so Pi can read and edit files by line-hash anchors (<line>:<hash>|). Especially helpful for open-weight or smaller models. Reload Pi after changing this.")
+				.addToggle((t) =>
+					t.setValue(s.hashlineEdit).onChange(async (v) => {
+						s.hashlineEdit = v;
+						await save();
+					}),
+				);
+		}
+
+		new Setting(containerEl)
+			.setName("Friction log")
+			.setDesc(`Records tool errors, verification failures, loop alerts, and edit undos for /retro (${s.frictionLog.length} recent events).`)
+			.addButton((b) =>
+				b.setButtonText("Clear").onClick(async () => {
+					s.frictionLog = [];
+					await save();
+					this.display();
+					new Notice("Cleared friction log.");
 				}),
 			);
 

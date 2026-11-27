@@ -46,8 +46,20 @@ function isBulkyToolResult(message: Message): message is ToolResult {
 function standIn(result: ToolResult, args: Record<string, unknown> | undefined): ToolResult {
 	const images = result.content.filter((block) => block.type === "image").length;
 	const size = [`${textLength(result)} characters`, images ? `${images} image${images === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
-	const text = `[Trimmed from the context to save space: the output of ${describeCall(result.toolName, args)}, ${size}. Run the tool again if you need it.]`;
+	const errSnippet = result.isError ? firstErrorLine(result) : "";
+	const errNote = result.isError ? (errSnippet ? ` Error: ${errSnippet}` : " (failed)") : "";
+	const text = `[Trimmed from the context to save space: the output of ${describeCall(result.toolName, args)}, ${size}.${errNote} Run the tool again if you need it.]`;
 	return { ...result, content: [{ type: "text", text }] };
+}
+
+function firstErrorLine(result: ToolResult): string {
+	const raw = result.content
+		.filter((block): block is Extract<ToolResult["content"][number], { type: "text" }> => block.type === "text")
+		.map((block) => block.text)
+		.join("\n")
+		.trim();
+	const line = raw.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim() ?? "";
+	return line.length > 160 ? `${line.slice(0, 160)}…` : line;
 }
 
 function textLength(result: ToolResult): number {

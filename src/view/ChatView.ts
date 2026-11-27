@@ -49,6 +49,7 @@ export class ChatView extends ItemView {
 				void this.drawer.refresh();
 			},
 			closeDrawer: () => this.drawer.close(),
+			openFreshTab: (prompt, opts) => void this.openFreshTabWithPrompt(prompt, opts),
 		};
 	}
 
@@ -140,6 +141,15 @@ export class ChatView extends ItemView {
 		menu.addSeparator();
 		menu.addItem((i) => i.setTitle("Rename session…").setIcon("pencil").onClick(() => void tab.renameCurrent()));
 		menu.addItem((i) => i.setTitle("Fork to new tab").setIcon("git-fork").onClick(() => void this.forkCurrentTab()));
+		menu.addItem((i) => i.setTitle("Handoff to fresh tab").setIcon("arrow-right-circle").onClick(() => void tab.handoffToFreshTab()));
+		const otherBackend: AgentBackend = tab.backend === "pi" ? "acp" : "pi";
+		menu.addItem((i) =>
+			i
+				.setTitle(`Blind review in fresh ${backendLabel(otherBackend)} tab`)
+				.setIcon("shield-check")
+				.onClick(() => void tab.blindEvaluateInFreshTab(otherBackend)),
+		);
+		menu.addItem((i) => i.setTitle("Session retro (promote fixes)").setIcon("wrench").onClick(() => void tab.runRetro()));
 		const note = this.app.workspace.getActiveFile();
 		if (note && note.extension === "md") {
 			const linked = tab.isLinkedTo(note);
@@ -447,6 +457,29 @@ export class ChatView extends ItemView {
 	async forkCurrentTab(): Promise<void> {
 		const forked = await this.current().createForkFile();
 		if (forked) await this.openSession(forked);
+	}
+
+	async openFreshTabWithPrompt(prompt: string, opts?: { backend?: AgentBackend; autoSend?: boolean }): Promise<void> {
+		this.init();
+		this.drawer.close();
+		const targetBackend = opts?.backend ?? this.active?.backend ?? this.plugin.settings.backend;
+		this.newTab(targetBackend);
+		const tab = this.current();
+		tab.insertText(prompt);
+		if (opts?.autoSend) await tab.sendDraft();
+	}
+
+	handoffCurrentTab(): Promise<void> {
+		return this.current().handoffToFreshTab();
+	}
+
+	blindEvaluateCurrentTab(): Promise<void> {
+		const tab = this.current();
+		return tab.blindEvaluateInFreshTab(tab.backend === "pi" ? "acp" : "pi");
+	}
+
+	retroCurrentTab(): Promise<void> {
+		return this.current().runRetro();
 	}
 
 	configureAdvisor(): Promise<void> {

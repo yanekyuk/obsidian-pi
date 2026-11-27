@@ -38,7 +38,7 @@ const PI_CAPABILITIES: AgentCapabilities = {
 };
 
 const ACP_CAPABILITIES: AgentCapabilities = {
-	queueing: false,
+	queueing: true,
 	branching: false,
 	compaction: false,
 	sessionFiles: false,

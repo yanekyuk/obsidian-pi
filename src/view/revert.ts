@@ -9,7 +9,7 @@ import { relative } from "path";
 
 const MAX_SNAPSHOT_BYTES = 2_000_000;
 
-export const EDITING_TOOLS = new Set(["edit", "write"]);
+export const EDITING_TOOLS = new Set(["edit", "write", "hashline_edit"]);
 
 export interface FileSnapshot {
 	path: string;
