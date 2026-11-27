@@ -19,7 +19,7 @@ import { InlineDialogs, type DialogForm } from "./InlineDialogs";
 import { scopeModels } from "../models";
 import { renderInline } from "./markdown";
 import { ModelPicker, pickOne, promptText } from "./modals";
-import { SubagentModal, type SubagentInfo } from "./SubagentModal";
+import { checkSubagentFinished, SubagentModal, type SubagentInfo } from "./SubagentModal";
 import { SideQuestions } from "./SideQuestion";
 import { TodoPanel, tasksFrom } from "./TodoPanel";
 import { appendToNote, createNote, createNoteFrom, insertIntoNote, markdownOf } from "./writeBack";
@@ -170,8 +170,11 @@ export class ChatSession {
 	private activityEl!: HTMLElement;
 	private subagentsEl!: HTMLElement;
 	private activeSubagents = new Map<string, ActiveSubagent>();
-	private manageSubagentActions = new Map<string, string>();
+	private manageSubagentCalls = new Map<string, { action: string; ids: string[] }>();
 	private subagentsLaunchedThisTurn = false;
+	private turnSeq = 0;
+	private subagentPollTimer: number | null = null;
+	private pollingSubagents = false;
 	private mcpWarningEl!: HTMLElement;
 	private prerequisitesEl!: HTMLElement;
 	private mcpCheckedAt = 0;
@@ -346,6 +349,7 @@ export class ChatSession {
 			window.clearTimeout(this.reconnectBannerTimer);
 			this.reconnectBannerTimer = null;
 		}
+		this.stopSubagentPolling();
 		this.side.dismiss();
 		this.dialogs.drop();
 		this.el.remove();
@@ -540,21 +544,82 @@ export class ChatSession {
 		this.host.changed(this);
 	}
 
+	private stopSubagentPolling(): void {
+		if (this.subagentPollTimer !== null) {
+			window.clearInterval(this.subagentPollTimer);
+			this.subagentPollTimer = null;
+		}
+	}
+
+	private ensureSubagentPolling(): void {
+		if (!this.plugin.hasLocalFs || this.activeSubagents.size === 0) {
+			this.stopSubagentPolling();
+			return;
+		}
+		if (this.subagentPollTimer !== null) return;
+		this.subagentPollTimer = window.setInterval(() => void this.pollSubagents(), 1500);
+	}
+
+	private async pollSubagents(): Promise<void> {
+		if (this.pollingSubagents || !this.plugin.hasLocalFs || this.activeSubagents.size === 0) return;
+		this.pollingSubagents = true;
+		try {
+			const parentId = this.state?.sessionId ?? this.heldSessionFile;
+			const entries = [...this.activeSubagents.entries()];
+			let changed = false;
+			for (const [toolCallId, sub] of entries) {
+				if (await checkSubagentFinished(sub, parentId)) {
+					if (this.activeSubagents.delete(toolCallId)) changed = true;
+				}
+			}
+			if (changed) {
+				this.renderSubagents();
+				if (!this.busy) this.setActivity(null);
+			}
+			if (this.activeSubagents.size === 0) {
+				this.stopSubagentPolling();
+			}
+		} finally {
+			this.pollingSubagents = false;
+		}
+	}
+
 	private clearSubagents(): void {
+		this.stopSubagentPolling();
 		this.subagentsLaunchedThisTurn = false;
 		this.activeSubagents.clear();
-		this.manageSubagentActions.clear();
+		this.manageSubagentCalls.clear();
 		this.renderSubagents();
 		this.setActivity(null);
+	}
+
+	private pruneCompletedTurnSubagents(): void {
+		let changed = false;
+		for (const [id, sub] of this.activeSubagents) {
+			if (sub.launchedTurnId !== this.turnSeq) {
+				this.activeSubagents.delete(id);
+				changed = true;
+			}
+		}
+		if (changed) {
+			this.manageSubagentCalls.clear();
+			this.renderSubagents();
+		}
+		if (this.activeSubagents.size === 0) this.stopSubagentPolling();
 	}
 
 	private setBusy(busy: boolean): void {
 		this.busy = busy;
 		if (!busy && !this.compacting) this.deliveryMode = "steer";
-		if (!busy && !this.subagentsLaunchedThisTurn) {
-			this.activeSubagents.clear();
-			this.manageSubagentActions.clear();
-			this.renderSubagents();
+		if (!busy) {
+			if (!this.subagentsLaunchedThisTurn) {
+				this.stopSubagentPolling();
+				this.activeSubagents.clear();
+				this.manageSubagentCalls.clear();
+				this.renderSubagents();
+			} else {
+				this.pruneCompletedTurnSubagents();
+			}
 		}
 		this.stopBtn.toggle(busy);
 		this.el.toggleClass("is-busy", busy);
@@ -1422,6 +1487,7 @@ export class ChatSession {
 
 	// A fresh session in this tab, on the pi that is already running.
 	async newSession(): Promise<void> {
+		this.clearSubagents();
 		if (!this.client.running) {
 			this.sessionFile = null;
 			this.state = null;
@@ -1435,6 +1501,7 @@ export class ChatSession {
 
 	// Swaps this tab over to another session. The panel has made sure no other tab holds it.
 	async load(path: string): Promise<void> {
+		this.clearSubagents();
 		const previous = this.heldSessionFile;
 		this.sessionFile = path;
 		if (this.state) this.state.sessionFile = path;
@@ -1590,6 +1657,7 @@ export class ChatSession {
 	private handleEvent(e: RpcEvent): void {
 		switch (e.type) {
 			case "agent_start":
+				this.turnSeq++;
 				this.subagentsLaunchedThisTurn = false;
 				this.loopGuard.reset();
 				this.editedFilesThisTurn.clear();
@@ -1597,6 +1665,7 @@ export class ChatSession {
 				this.isVerifyRetryTurn = false;
 				this.setBusy(true);
 				this.setActivity("Working…");
+				void this.pollSubagents();
 				void this.checkMcp();
 				break;
 			case "agent_settled":
@@ -1606,6 +1675,7 @@ export class ChatSession {
 					this.verifyRetries = 0;
 				}
 				this.setBusy(false);
+				if (this.activeSubagents.size > 0) void this.pollSubagents();
 				this.settleToolGroup();
 				this.live = null;
 				void this.refreshStats();
@@ -1662,11 +1732,19 @@ export class ChatSession {
 						model,
 						prompt,
 						startedAt: Date.now(),
+						launchedTurnId: this.turnSeq,
 					});
 					this.renderSubagents();
+					this.ensureSubagentPolling();
 				} else if (e.toolName === "manage_subagents") {
 					const action = typeof e.args?.Action === "string" ? e.args.Action : typeof e.args?.action === "string" ? e.args.action : "";
-					if (action) this.manageSubagentActions.set(e.toolCallId, action);
+					const rawIds = Array.isArray(e.args?.ConversationIds)
+						? e.args.ConversationIds
+						: Array.isArray(e.args?.conversationIds)
+							? e.args.conversationIds
+							: [];
+					const ids = rawIds.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+					if (action) this.manageSubagentCalls.set(e.toolCallId, { action, ids });
 				}
 				this.setActivity(formatActivityText(e.toolName, e.args));
 				{
@@ -1702,6 +1780,7 @@ export class ChatSession {
 					if (e.isError) {
 						this.activeSubagents.delete(e.toolCallId);
 						this.renderSubagents();
+						if (this.activeSubagents.size === 0) this.stopSubagentPolling();
 					} else {
 						const sub = this.activeSubagents.get(e.toolCallId);
 						if (sub) {
@@ -1711,13 +1790,35 @@ export class ChatSession {
 							const matchId = text.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i)?.[0];
 							if (detailsId || matchId) sub.conversationId = detailsId ?? matchId;
 						}
+						void this.pollSubagents();
 					}
 				} else if (e.toolName === "manage_subagents") {
-					const action = this.manageSubagentActions.get(e.toolCallId);
-					this.manageSubagentActions.delete(e.toolCallId);
-					if (!e.isError && action === "kill_all") {
-						this.activeSubagents.clear();
-						this.renderSubagents();
+					const call = this.manageSubagentCalls.get(e.toolCallId);
+					this.manageSubagentCalls.delete(e.toolCallId);
+					if (!e.isError && call) {
+						let changed = false;
+						if (call.action === "kill_all") {
+							changed = this.activeSubagents.size > 0;
+							this.activeSubagents.clear();
+						} else if (call.action === "kill" && call.ids.length > 0) {
+							const killed = new Set(call.ids);
+							for (const [id, sub] of this.activeSubagents) {
+								if (sub.conversationId && killed.has(sub.conversationId)) {
+									this.activeSubagents.delete(id);
+									changed = true;
+								}
+							}
+						} else if (call.action === "list") {
+							const text = contentText(e.result?.content ?? "");
+							if (/no active (direct )?subagents|^\s*\[\s*\]\s*$/i.test(text.trim())) {
+								changed = this.activeSubagents.size > 0;
+								this.activeSubagents.clear();
+							}
+						}
+						if (changed) {
+							this.renderSubagents();
+							if (this.activeSubagents.size === 0) this.stopSubagentPolling();
+						}
 					}
 				}
 				card.setResult(e.result, e.isError);

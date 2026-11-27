@@ -10,6 +10,7 @@ export interface SubagentInfo {
 	model: string;
 	prompt: string;
 	startedAt: number;
+	launchedTurnId?: number;
 	conversationId?: string;
 	resultText?: string;
 }
@@ -19,7 +20,7 @@ interface TranscriptToolCall {
 	args?: Record<string, unknown>;
 }
 
-interface TranscriptStep {
+export interface TranscriptStep {
 	step_index?: number;
 	source?: string;
 	type?: string;
@@ -34,9 +35,137 @@ interface TranscriptStep {
 const POLL_INTERVAL_MS = 800;
 const MAX_TOOL_OUTPUT_CHARS = 4000;
 const BRAIN_DIR = join(homedir(), ".gemini", "antigravity-cli", "brain");
+const TERMINAL_STATUSES = new Set(["DONE", "ERROR", "CANCELLED", "CANCELED", "FAILED"]);
 
-function transcriptPathFor(conversationId: string): string {
+export function transcriptPathFor(conversationId: string): string {
 	return join(BRAIN_DIR, conversationId, ".system_generated", "logs", "transcript.jsonl");
+}
+
+export function parseTranscript(raw: string): TranscriptStep[] {
+	const steps: TranscriptStep[] = [];
+	for (const line of raw.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		try {
+			steps.push(JSON.parse(trimmed) as TranscriptStep);
+		} catch {
+			// Ignore incomplete trailing line while the subagent is writing.
+		}
+	}
+	return steps;
+}
+
+/** True when a subagent's transcript ends on a completed final planner response (no pending tool calls) or terminal error. */
+export function isTranscriptFinished(steps: TranscriptStep[]): boolean {
+	if (!steps.length) return false;
+	const last = steps[steps.length - 1];
+	const status = typeof last.status === "string" ? last.status.toUpperCase() : "";
+	if (last.type === "ERROR" || status === "ERROR" || status === "CANCELLED" || status === "CANCELED" || status === "FAILED") {
+		return true;
+	}
+	if (last.type === "PLANNER_RESPONSE") {
+		const toolCount = Array.isArray(last.tool_calls) ? last.tool_calls.length : 0;
+		if (toolCount === 0 && (!status || TERMINAL_STATUSES.has(status))) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** True when the parent session's transcript already received a message from this subagent conversationId
+ * (or a server-restart stop notice logged after this subagent started). */
+export function parentTranscriptReceivedFrom(rawParentTranscript: string, conversationId: string, startedAt?: number): boolean {
+	if (!rawParentTranscript) return false;
+	if (conversationId && rawParentTranscript.includes(`sender=${conversationId}`)) return true;
+	if (startedAt && rawParentTranscript.includes("All your subagents and background tasks have been stopped")) {
+		for (const step of parseTranscript(rawParentTranscript)) {
+			if (
+				step.type === "SYSTEM_MESSAGE" &&
+				typeof step.content === "string" &&
+				step.content.includes("All your subagents and background tasks have been stopped")
+			) {
+				const ts = step.created_at ? Date.parse(step.created_at) : Number.NaN;
+				if (Number.isFinite(ts) && ts >= startedAt - 2000) return true;
+			}
+		}
+	}
+	return false;
+}
+
+export async function resolveSubagentTranscriptPath(subagent: SubagentInfo): Promise<string | null> {
+	if (subagent.conversationId) {
+		const p = transcriptPathFor(subagent.conversationId);
+		try {
+			await fs.access(p);
+			return p;
+		} catch {
+			return null;
+		}
+	}
+
+	// Fallback: scan recently modified Antigravity brain transcripts and match the initial prompt.
+	if (!subagent.prompt) return null;
+	let entries: string[];
+	try {
+		entries = await fs.readdir(BRAIN_DIR);
+	} catch {
+		return null;
+	}
+
+	const cutoff = subagent.startedAt - 10_000;
+	const needle = subagent.prompt.slice(0, 160).trim();
+	const candidates: { id: string; path: string; mtimeMs: number }[] = [];
+
+	for (const id of entries) {
+		const p = transcriptPathFor(id);
+		try {
+			const stat = await fs.stat(p);
+			if (stat.mtimeMs >= cutoff) {
+				candidates.push({ id, path: p, mtimeMs: stat.mtimeMs });
+			}
+		} catch {
+			// No transcript yet or not a conversation directory.
+		}
+	}
+
+	candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+	for (const candidate of candidates.slice(0, 12)) {
+		try {
+			const raw = await fs.readFile(candidate.path, "utf8");
+			const firstLine = raw.split("\n", 1)[0];
+			if (!firstLine) continue;
+			const step = JSON.parse(firstLine) as TranscriptStep;
+			if (step.type === "USER_INPUT" && typeof step.content === "string" && step.content.includes(needle)) {
+				subagent.conversationId = candidate.id;
+				return candidate.path;
+			}
+		} catch {
+			// Ignore unreadable/partial files.
+		}
+	}
+	return null;
+}
+
+export async function checkSubagentFinished(subagent: SubagentInfo, parentSessionId?: string | null): Promise<boolean> {
+	const path = await resolveSubagentTranscriptPath(subagent);
+	if (path) {
+		try {
+			const raw = await fs.readFile(path, "utf8");
+			if (isTranscriptFinished(parseTranscript(raw))) return true;
+		} catch {
+			// Ignore transient read errors while the file is being written.
+		}
+	}
+	if (parentSessionId && subagent.conversationId) {
+		const cleanParent = parentSessionId.startsWith("acp:") ? parentSessionId.slice(4) : parentSessionId;
+		try {
+			const parentRaw = await fs.readFile(transcriptPathFor(cleanParent), "utf8");
+			if (parentTranscriptReceivedFrom(parentRaw, subagent.conversationId, subagent.startedAt)) return true;
+		} catch {
+			// Parent transcript unavailable.
+		}
+	}
+	return false;
 }
 
 function summarizeArgs(args?: Record<string, unknown>): string {
@@ -56,20 +185,6 @@ function summarizeArgs(args?: Record<string, unknown>): string {
 		}
 	}
 	return "";
-}
-
-function parseTranscript(raw: string): TranscriptStep[] {
-	const steps: TranscriptStep[] = [];
-	for (const line of raw.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-		try {
-			steps.push(JSON.parse(trimmed) as TranscriptStep);
-		} catch {
-			// Ignore incomplete trailing line while the subagent is writing.
-		}
-	}
-	return steps;
 }
 
 export class SubagentModal extends Modal {
@@ -162,58 +277,12 @@ export class SubagentModal extends Modal {
 	}
 
 	private async resolveTranscriptPath(): Promise<string | null> {
-		if (this.subagent.conversationId) {
-			const p = transcriptPathFor(this.subagent.conversationId);
-			try {
-				await fs.access(p);
-				return p;
-			} catch {
-				return null;
-			}
+		const hadId = Boolean(this.subagent.conversationId);
+		const path = await resolveSubagentTranscriptPath(this.subagent);
+		if (!hadId && this.subagent.conversationId) {
+			this.updateBadges();
 		}
-
-		// Fallback: scan recently modified Antigravity brain transcripts and match the initial prompt.
-		if (!this.subagent.prompt) return null;
-		let entries: string[];
-		try {
-			entries = await fs.readdir(BRAIN_DIR);
-		} catch {
-			return null;
-		}
-
-		const cutoff = this.subagent.startedAt - 10_000;
-		const needle = this.subagent.prompt.slice(0, 160).trim();
-		const candidates: { id: string; path: string; mtimeMs: number }[] = [];
-
-		for (const id of entries) {
-			const p = transcriptPathFor(id);
-			try {
-				const stat = await fs.stat(p);
-				if (stat.mtimeMs >= cutoff) {
-					candidates.push({ id, path: p, mtimeMs: stat.mtimeMs });
-				}
-			} catch {
-				// No transcript yet or not a conversation directory.
-			}
-		}
-
-		candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
-		for (const candidate of candidates.slice(0, 12)) {
-			try {
-				const raw = await fs.readFile(candidate.path, "utf8");
-				const firstLine = raw.split("\n", 1)[0];
-				if (!firstLine) continue;
-				const step = JSON.parse(firstLine) as TranscriptStep;
-				if (step.type === "USER_INPUT" && typeof step.content === "string" && step.content.includes(needle)) {
-					this.subagent.conversationId = candidate.id;
-					this.updateBadges();
-					return candidate.path;
-				}
-			} catch {
-				// Ignore unreadable/partial files.
-			}
-		}
-		return null;
+		return path;
 	}
 
 	private async refresh(): Promise<void> {

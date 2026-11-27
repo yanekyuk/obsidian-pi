@@ -54,6 +54,7 @@ export { default as trimToolOutput } from ${JSON.stringify(join(root, "pi-extens
 export { lineHash, formatHashlines, applyHashlineEdits } from ${JSON.stringify(join(root, "pi-extension/hashline.ts"))};
 export { capMcpText } from ${JSON.stringify(join(root, "src/mcpBridge.ts"))};
 export { extractTouchedPath, runVerifyCommand, formatVerifyRetryPrompt, LoopGuard, appendFriction, buildRetroPrompt, buildHandoffPrompt, buildEvaluatorPrompt } from ${JSON.stringify(join(root, "src/harness.ts"))};
+export { parseTranscript, isTranscriptFinished, parentTranscriptReceivedFrom } from ${JSON.stringify(join(root, "src/view/SubagentModal.ts"))};
 export { PiRemoteServer } from ${JSON.stringify(join(root, "src/remote/server.ts"))};
 export { PiRemoteClient } from ${JSON.stringify(join(root, "src/remote/client.ts"))};
 export { DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } from ${JSON.stringify(join(root, "src/remote/ws.ts"))};`,
@@ -66,13 +67,13 @@ const obsidianStub = {
 		build.onResolve({ filter: /^@earendil-works\/pi-coding-agent$/ }, () => ({ path: "pi", namespace: "stub" }));
 		build.onResolve({ filter: /^typebox$/ }, () => ({ path: "typebox", namespace: "stub" }));
 		build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
-			contents: "export class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport class PluginSettingTab {}\nexport class Setting {}\nexport const Type = new Proxy({}, { get: () => () => ({}) });\nexport const createBashTool = () => {};\nexport const createLocalBashOperations = () => {};\nexport const createPowerShellTool = () => {};\nexport const createLocalPowerShellOperations = () => {};\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');\nexport const getAllTags = () => [];",
+			contents: "export class Component {}\nexport class Modal {}\nexport class MarkdownView {}\nexport class TFile {}\nexport class Notice {}\nexport class PluginSettingTab {}\nexport class Setting {}\nexport const Type = new Proxy({}, { get: () => () => ({}) });\nexport const createBashTool = () => {};\nexport const createLocalBashOperations = () => {};\nexport const createPowerShellTool = () => {};\nexport const createLocalPowerShellOperations = () => {};\nexport const MarkdownRenderer = {};\nexport const setIcon = () => {};\nexport const normalizePath = (p) => p.replace(/\\/+/g, '/');\nexport const getAllTags = () => [];",
 		}));
 	},
 };
 const outfile = join(work, "bundle.mjs");
 await esbuild.build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile, logLevel: "error", plugins: [obsidianStub, bundledFiles] });
-const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parseElicitationFields, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, backendLabel, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput, lineHash, formatHashlines, applyHashlineEdits, capMcpText, extractTouchedPath, runVerifyCommand, formatVerifyRetryPrompt, LoopGuard, appendFriction, buildRetroPrompt, buildHandoffPrompt, buildEvaluatorPrompt, PiRemoteServer, PiRemoteClient, DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } =
+const { PiRpcClient, Requirements, resolveEnv, sharedPiEnvironment, environmentForShell, DEFAULT_SETTINGS, listSessions, splitHeader, splitPreviews, parseOptions, parseMultiSelect, parseElicitationFields, parsePiList, findRequired, manualInstallCommands, REQUIRED_PACKAGES, SKILLS_PACKAGE, OBSIDIAN_SKILLS, tasksFrom, TOOL_RENDERERS, vaultMcpServers, probeMcp, unusableMcpServers, hasLegacyMcpCommand, summarize, scopeModels, backendLabel, savedTabsFrom, panelsIn, extractBundledFiles, USER_AGENT_DIR, HARNESS_AGENT_DIR, prepareAgentDir, sessionDirFor, disabled, enabled, isDisabled, loadsAllSkills, readPackageEntries, replacePackageEntry, splitTitle, markdownOf, commandAllowed, snapshotBefore, snapshotAfter, unchangedSince, transcriptMarkdown, resolveLinked, sessionDirs, activeBranchesOf, activePathOf, branchTurnsOf, cleanBranchSummary, entryIdOf, BRANCH_ANCHOR_TYPE, BRANCH_START_TYPE, buildSystemPrompt, DEFAULT_SHELL_TIMEOUT_SECONDS, TREE_COMMAND, rewordMessage, withContext, SearchIndex, trimToolOutput, lineHash, formatHashlines, applyHashlineEdits, capMcpText, extractTouchedPath, runVerifyCommand, formatVerifyRetryPrompt, LoopGuard, appendFriction, buildRetroPrompt, buildHandoffPrompt, buildEvaluatorPrompt, parseTranscript, isTranscriptFinished, parentTranscriptReceivedFrom, PiRemoteServer, PiRemoteClient, DEFAULT_SERVER_PORT, generateServerToken, tokensMatch, normalizeHttpUrl, normalizeWsUrl } =
 	await import(pathToFileURL(outfile).href);
 
 const withPrompt = process.argv.includes("--prompt");
@@ -466,6 +467,16 @@ const check = (ok, label, detail = "") => {
 		overlapThrew = true;
 	}
 	check(overlapThrew, "hashline: rejects overlapping edit spans before mutating");
+
+	// Subagent transcript completion detection
+	check(!isTranscriptFinished(parseTranscript('{"type":"USER_INPUT","status":"DONE","content":"check claims"}\n')), "subagent status: USER_INPUT alone is still running");
+	check(!isTranscriptFinished(parseTranscript('{"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"read_file"}]}\n')), "subagent status: PLANNER_RESPONSE with tool_calls is still running");
+	check(!isTranscriptFinished(parseTranscript('{"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"read_file"}]}\n{"type":"GENERIC","status":"DONE","content":"file contents"}\n')), "subagent status: trailing GENERIC tool output is still running");
+	check(isTranscriptFinished(parseTranscript('{"type":"USER_INPUT","status":"DONE"}\n{"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[],"content":"All verified."}\n')), "subagent status: terminal PLANNER_RESPONSE with 0 tool_calls is finished");
+	check(!isTranscriptFinished(parseTranscript('{"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[]}\n{"type":"USER_INPUT","status":"DONE","content":"follow up"}\n')), "subagent status: revived subagent with new USER_INPUT is running again");
+	check(parentTranscriptReceivedFrom('{"type":"SYSTEM_MESSAGE","content":"[Message] sender=sub-1234 content=done"}\n', "sub-1234"), "subagent status: detects completion from parent transcript sender=<id>");
+	check(parentTranscriptReceivedFrom('{"type":"SYSTEM_MESSAGE","created_at":"2026-11-27T12:00:00Z","content":"All your subagents and background tasks have been stopped"}\n', "sub-1234", Date.parse("2026-11-27T11:59:00Z")), "subagent status: detects server-restart stop notice after subagent start");
+	check(!parentTranscriptReceivedFrom('{"type":"SYSTEM_MESSAGE","created_at":"2026-11-27T11:00:00Z","content":"All your subagents and background tasks have been stopped"}\n', "sub-1234", Date.parse("2026-11-27T11:59:00Z")), "subagent status: ignores older server-restart notices from before subagent start");
 }
 
 // ---- undo for pi's edits: what the panel keeps of a file around an edit or write

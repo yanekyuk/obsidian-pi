@@ -342,7 +342,7 @@ export class AcpClient implements AgentClient {
 				terminal: false,
 				elicitation: { form: {} },
 			},
-			clientInfo: { name: "agent-workbench", version: "0.1.47" },
+			clientInfo: { name: "agent-workbench", version: "0.1.48" },
 		});
 	}
 
